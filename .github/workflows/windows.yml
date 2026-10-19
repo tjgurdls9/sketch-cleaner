@@ -1,0 +1,30 @@
+name: Windows test build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm run build
+      - run: npm run test:e2e
+      - run: npm run make -- --platform win32 --arch x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SketchCleaner-Windows-x64-TEST-unsigned
+          path: out/make/**
+          if-no-files-found: error
+          retention-days: 14
