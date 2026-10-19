@@ -19,7 +19,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:coverage
-      - run: npm run build
       - run: npm run make -- --platform win32 --arch x64
       - name: Check packaged native image libraries
         shell: pwsh
@@ -32,6 +31,13 @@ jobs:
         run: |
           $env:SKETCH_TEST_EXECUTABLE = (Resolve-Path "out/Sketch Cleaner-win32-x64/SketchCleaner.exe").Path
           npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-verification-evidence
+          path: test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: SketchCleaner-Windows-x64-TEST-unsigned

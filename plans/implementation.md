@@ -46,4 +46,4 @@
 - 화면: 구현·검토 완료. 한국어 도구/요청/검수/저장, 비동기 전환 보호, 작은 화면 핵심 조작 유지.
 - 통합: 타입·린트·자동 테스트 51개·빌드 통과. 개발 호스트 패키징 통과. 상세는 `docs/ACCEPTANCE.md`와 `docs/TDD_EVIDENCE.md`.
 - Windows 인수: 미실행. 실제 설치·GUI·DPI·20MP 성능·업무 사진·Plus 품질은 검증 대기.
-- 원격 저장소: 사용자가 `https://github.com/tjgurdls9/sketch-cleaner`를 비공개로 생성했다고 확인. 이 세션의 GitHub 연결에서 접근 404로 업로드·Windows CI 실행 대기. 원본이나 결과 사진은 업로드하지 않음.
+- 원격 저장소: `https://github.com/tjgurdls9/sketch-cleaner` 비공개·쓰기 권한 확인, 7개 단계 커밋 업로드 및 각 파일 트리 해시 일치 확인 완료. GitHub 연결 도구로 재생한 이력과 로컬 원래 이력의 대응은 `docs/GIT_PROTOCOL.md`에 기록. Windows CI 검증 진행 중. 원본이나 결과 사진은 업로드하지 않음.
