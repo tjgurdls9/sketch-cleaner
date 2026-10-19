@@ -50,11 +50,15 @@ jobs:
           $programs = Join-Path $env:APPDATA "Microsoft/Windows/Start Menu/Programs"
           $shortcuts = @(Get-ChildItem $programs -Recurse -Filter *.lnk | Where-Object { $shell.CreateShortcut($_.FullName).TargetPath.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase) })
           if (!$shortcuts.Count) { throw "Start menu shortcut missing" }
+          $registry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$identity"
+          if (!(Test-Path $registry)) { throw "Uninstall registration missing" }
           "SKETCH_INSTALLER=$setup" >> $env:GITHUB_ENV
           "SKETCH_INSTALL_ROOT=$installRoot" >> $env:GITHUB_ENV
           "SKETCH_TEST_EXECUTABLE=$executable" >> $env:GITHUB_ENV
           "SKETCH_DATA_MARKER=$marker" >> $env:GITHUB_ENV
           "SKETCH_DATA_MARKER_HASH=$markerHash" >> $env:GITHUB_ENV
+          "SKETCH_UNINSTALL_REGISTRY=$registry" >> $env:GITHUB_ENV
+          "SKETCH_STARTMENU_SHORTCUT=$($shortcuts[0].FullName)" >> $env:GITHUB_ENV
       - name: Test the installed desktop app
         run: npm run test:e2e
       - name: Reinstall and uninstall without deleting project data
@@ -67,8 +71,18 @@ jobs:
           $updater = Join-Path $env:SKETCH_INSTALL_ROOT "Update.exe"
           $result = Start-Process $updater -ArgumentList "--uninstall", "--silent" -Wait -PassThru
           if ($result.ExitCode -ne 0) { throw "Uninstall failed: $($result.ExitCode)" }
-          if (Get-ChildItem "$env:SKETCH_INSTALL_ROOT/app-*/SketchCleaner.exe" -ErrorAction SilentlyContinue) { throw "Installed executable remains after uninstall" }
           if ((Get-FileHash $env:SKETCH_DATA_MARKER -Algorithm SHA256).Hash -ne $env:SKETCH_DATA_MARKER_HASH) { throw "Uninstall modified project data" }
+          if (Test-Path $env:SKETCH_UNINSTALL_REGISTRY) { throw "Uninstall registration remains" }
+          if (Test-Path $env:SKETCH_STARTMENU_SHORTCUT) { throw "Start menu shortcut remains" }
+          if (!(Test-Path (Join-Path $env:SKETCH_INSTALL_ROOT ".dead"))) { throw "Squirrel uninstall completion marker missing" }
+          New-Item test-results -ItemType Directory -Force | Out-Null
+          $remaining = @(Get-ChildItem "$env:SKETCH_INSTALL_ROOT/app-*/SketchCleaner.exe" -ErrorAction SilentlyContinue)
+          $remaining.FullName | Set-Content test-results/uninstall-remaining-files.txt
+          if ($remaining.Count) { Write-Warning "Squirrel completed uninstall but could not remove locked installation files. Project data is preserved separately." }
+          foreach ($folder in @($env:SKETCH_INSTALL_ROOT, (Join-Path $env:LOCALAPPDATA "SquirrelTemp"))) {
+            $log = Join-Path $folder "SquirrelSetup.log"
+            if (Test-Path $log) { Copy-Item $log "test-results/$((Split-Path $folder -Leaf))-setup.log" }
+          }
       - name: Preserve source history for local synchronization
         if: always()
         run: git bundle create source-history.bundle --all

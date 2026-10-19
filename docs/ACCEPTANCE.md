@@ -25,6 +25,8 @@ DOM 통합 테스트는 실제 renderer와 픽셀 엔진을 실행하지만, Can
 
 [Windows CI 실행 9](https://github.com/tjgurdls9/sketch-cleaner/actions/runs/39207002773)에서는 설치 폴더를 `%LOCALAPPDATA%\SketchCleanerDesktop`으로 분리한 후 실제 설치·설치된 앱 E2E·동일 버전 재설치·제거 및 `%LOCALAPPDATA%\SketchCleaner\projects`의 표식 데이터 보존까지 통과했습니다. 실제 프로젝트 직렬화/복구는 별도의 파일 저장 테스트에서 검증하며, 설치 표식 검사는 기본 데이터 경로가 설치 프로그램의 삭제 범위 밖에 있다는 회귀 검사입니다.
 
+[실행 10](https://github.com/tjgurdls9/sketch-cleaner/actions/runs/39207157701)은 앱 E2E까지 통과했으나 제거 명령 성공 후 실행 파일이 남아 엄격한 파일 부재 검사에서 실패했습니다. [Squirrel 제거 구현](https://github.com/Squirrel/Squirrel.Windows/blob/develop/src/Squirrel/UpdateManager.ApplyReleases.cs)은 잠긴 설치 파일의 삭제를 포기할 수 있습니다. 후속 CI는 제거 등록·시작 메뉴 바로가기의 삭제와 `.dead` 완료 표식, 프로젝트 데이터 해시 보존을 필수로 검사하고 잔여 설치 파일과 설치 로그를 별도 자료로 기록합니다. 설치 폴더의 모든 파일이 즉시 사라진다고 보장하지 않습니다.
+
 ## 스펙 인수 항목 대조
 
 | 영역 | 확인한 근거 | 남은 실기기 인수 |
