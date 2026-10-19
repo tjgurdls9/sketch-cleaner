@@ -1115,7 +1115,7 @@ function setTool(tool: Tool): void {
     state.showMasks = true;
     syncMaskToggle();
   }
-  document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(button => {
+  document.querySelectorAll<HTMLButtonElement>('button[data-tool]').forEach(button => {
     const active = button.dataset.tool === tool;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
@@ -1699,7 +1699,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach(button => {
     button.addEventListener('click', () => setPanel(button.dataset.panel as Panel));
   });
-  document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(button => {
+  document.querySelectorAll<HTMLButtonElement>('button[data-tool]').forEach(button => {
     button.addEventListener('click', () => setTool(button.dataset.tool as Tool));
   });
   document.querySelectorAll<HTMLButtonElement>('[data-lasso]').forEach(button => {

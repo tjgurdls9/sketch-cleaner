@@ -141,7 +141,9 @@ it('connects real renderer controls to worker edits, manual request review and P
   expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(2);
   expect(project!.snapshot.workVersion).toBe(beforeCancelVersion);
   expect(savedColor()).toEqual(beforeCancelColor);
-  click('[data-tool="delete"]');
+  click('button[data-tool="delete"]');
+  expect(document.querySelector('#stage')?.hasAttribute('aria-pressed')).toBe(false);
+  expect(document.querySelector('#stage')?.classList.contains('active')).toBe(false);
   click('[data-action="select-all"]');
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="fill-white"]')?.disabled).toBe(false));
   expect(sceneColorAt(148, 112)).toEqual([194, 145, 134, 255]);

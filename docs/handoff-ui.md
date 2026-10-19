@@ -2,7 +2,7 @@
 
 ## 0.2 automatic draft
 
-New-photo creation alone starts auto-clean through the existing Worker. Saved-project opening stays idle. Changed results use one history commit; no-op/cancel leaves the saved version unchanged. The edit panel foregrounds direct correction and result saving; background fill/tone and manual ChatGPT remain optional. DOM checks cover these states, alpha compositing, masks, affine candidate overlay, existing editing and export.
+New-photo creation alone starts auto-clean through the existing Worker. Saved-project opening stays idle. Changed results use one history commit; no-op/cancel leaves the saved version unchanged. The edit panel foregrounds direct correction and result saving; background fill/tone and manual ChatGPT remain optional. DOM checks cover these states, alpha compositing, masks, affine candidate overlay, existing editing and export. Tool selectors target buttons only, so the stage's cursor `data-tool` never becomes a tool control.
 
 The scalar canvas loop avoids per-pixel objects/arrays. A warmed 12-frame jsdom/Canvas-mock comparison at 1200×800 with a 5000×4000 image measured median DPR1 16.2→7.9ms and DPR2 59→30.2ms. This excludes actual GPU/Windows interaction and is not a user-PC performance guarantee. The temporary benchmark was removed; pixel-output regression checks remain.
 

@@ -104,7 +104,7 @@ test('desktop local editing, manual request round-trip and durable recovery', as
     await page.locator('#tabEdit').click();
     await page.locator('[data-action="clear-selection"]').click();
     await expect(page.locator('#processingOverlay')).toBeHidden();
-    await page.locator('[data-tool="lasso"]').click();
+    await page.locator('button[data-tool="lasso"]').click();
     const lasso = await Promise.all([
       imageScreenPoint(page, 70, 60, 480, 320),
       imageScreenPoint(page, 220, 60, 480, 320),
@@ -116,7 +116,7 @@ test('desktop local editing, manual request round-trip and durable recovery', as
     for (const point of [...lasso.slice(1), lasso[0]]) await page.mouse.move(point.x, point.y, { steps: 4 });
     await page.mouse.up();
     await expect(page.locator('#processingOverlay')).toBeHidden();
-    await page.locator('[data-tool="protect"]').click();
+    await page.locator('button[data-tool="protect"]').click();
     await page.locator('#brushSize').evaluate(element => {
       (element as HTMLInputElement).value = '8';
       element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -248,7 +248,7 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     await page.locator('#zoom100Button').click();
     await expect(page.locator('#zoomReadout')).toHaveText('100%');
     await page.locator('#tabEdit').click();
-    await page.locator('[data-tool="delete"]').click();
+    await page.locator('button[data-tool="delete"]').click();
     await page.locator('#brushSize').evaluate(element => {
       (element as HTMLInputElement).value = '3';
       element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -285,7 +285,7 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     manuallyCleaned = await readPersisted();
     expect(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
 
-    await page.locator('[data-tool="protect"]').click();
+    await page.locator('button[data-tool="protect"]').click();
     await page.locator('#brushSize').evaluate(element => {
       (element as HTMLInputElement).value = '4';
       element.dispatchEvent(new Event('input', { bubbles: true }));
