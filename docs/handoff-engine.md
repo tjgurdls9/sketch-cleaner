@@ -10,12 +10,12 @@ For local edits and candidate application, the effective amount is `D / 255 × (
 
 The history helpers are `createHistory`, `commitHistory`, `undoHistory`, `redoHistory`, and `historySnapshot`. Image buffers are shared between states where safe, and the history budget counts unique backing buffers with a 512 MiB limit. When older states are discarded, `History.truncated` remains true so the UI can tell the user that the oldest undo steps are no longer available. Undo and redo assign fresh `workVersion` values.
 
-`PixelJob` supports `guide`, `candidate`, `stroke`, `restore`, `lasso`, `rotate`, `crop`, `fill`, and `adjust`. `PixelJobRequest` uses a string ID; responses are `progress`, `result`, or a safe Korean `error`. Long jobs report progress by rows or stroke work units. Cancellation is by terminating the worker; the renderer owns worker lifecycle and cancellation.
+`PixelJob` supports `guide`, `candidate`, `stroke`, `restore`, `lasso`, `rotate`, `crop`, `fill`, and `adjust`. `PixelJobRequest` uses a string ID; responses are `progress`, `result`, or a safe Korean `error`. Long jobs report progress by rows or stroke work units. Result buffers are transferred back to the renderer so the worker does not create another full copy. Input snapshots still use structured cloning, so the renderer's buffers remain intact and large inputs still have a measurable peak-memory cost. Cancellation is by terminating the worker; the renderer owns worker lifecycle and cancellation.
 
 ## Verification
 
 - The initial engine tests were run red by the main agent before implementation; the missing engine module failed as expected at checkpoint `f193f72`.
-- `npm run test:coverage -- tests/core-engine.test.ts`: 18 tests passed. Core coverage is 90.13% statements, 81.26% branches, 96% functions, and 97% lines.
+- `npm run test:coverage -- tests/core-engine.test.ts`: 19 tests passed. Core coverage is 90.13% statements, 81.26% branches, 96% functions, and 97% lines.
 - `npm run typecheck`: passed.
 - Targeted ESLint for `src/core/engine.ts`, `src/core/worker-protocol.ts`, `src/core/pixel-worker.ts`, and `tests/core-engine.test.ts`: passed.
 - A synthetic 1024×1024 image with a 500-point diagonal stroke is asserted under 2 seconds. The test also verifies stroke strength is applied once despite overlapping segments.

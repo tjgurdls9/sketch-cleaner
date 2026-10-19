@@ -1,6 +1,6 @@
 module.exports = {
   packagerConfig: {
-    asar: true,
+    asar: { unpack: '**/node_modules/@img/**' },
     name: 'Sketch Cleaner',
     executableName: 'SketchCleaner',
     appBundleId: 'com.sketchcleaner.desktop',

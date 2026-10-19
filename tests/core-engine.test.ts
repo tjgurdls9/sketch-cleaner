@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Pixels, Snapshot } from '../src/shared/types';
 import {
   adjustSelection,
@@ -273,5 +273,38 @@ describe('pixel worker jobs', () => {
     expect(response.type).toBe('result');
     expect(progress.length).toBeGreaterThan(1);
     expect(progress.at(-1)).toEqual([2, 2]);
+  });
+
+  it('transfers each unique result buffer out of the worker', async () => {
+    type WorkerHandler = (event: MessageEvent<PixelJobRequest>) => void;
+    const messages: Array<{ response: PixelJobResponse; transfer?: Transferable[] }> = [];
+    const fakeWorker = {
+      onmessage: null as WorkerHandler | null,
+      postMessage(response: PixelJobResponse, transfer?: Transferable[]) { messages.push({ response, transfer }); },
+    };
+    const previousSelf = Object.getOwnPropertyDescriptor(globalThis, 'self');
+    Object.defineProperty(globalThis, 'self', { configurable: true, value: fakeWorker });
+    try {
+      vi.resetModules();
+      await import('../src/core/pixel-worker');
+      const state = snapshot(2, 2);
+      fakeWorker.onmessage?.({
+        data: { id: 'transfer-1', job: { type: 'lasso', snapshot: state, polygon: [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 2 }, { x: 0, y: 2 }], mode: 'inside' } },
+      } as MessageEvent<PixelJobRequest>);
+      const result = [...messages].reverse().find(item => item.response.type === 'result');
+      expect(result?.response.type).toBe('result');
+      if (!result || result.response.type !== 'result' || !('base' in result.response.value)) throw new Error('Expected a snapshot result');
+      const expected = new Set([
+        result.response.value.base.data.buffer,
+        result.response.value.working.data.buffer,
+        result.response.value.deleteMask.buffer,
+        result.response.value.protectMask.buffer,
+      ]);
+      expect(new Set(result.transfer)).toEqual(expected);
+      expect(result.transfer).toHaveLength(expected.size);
+    } finally {
+      if (previousSelf) Object.defineProperty(globalThis, 'self', previousSelf);
+      else Reflect.deleteProperty(globalThis, 'self');
+    }
   });
 });

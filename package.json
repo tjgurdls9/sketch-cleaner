@@ -19,7 +19,8 @@
     "make": "npm run build && electron-forge make"
   },
   "dependencies": {
-    "sharp": "^0.34.5"
+    "electron-squirrel-startup": "^1.0.1",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@electron-forge/cli": "^8.0.1",
@@ -27,15 +28,17 @@
     "@electron-forge/plugin-auto-unpack-natives": "^8.0.1",
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.56.1",
+    "@types/electron-squirrel-startup": "^1.0.2",
     "@types/node": "^24.10.1",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^5.0.5",
     "electron": "^44.9.0",
     "esbuild": "^0.25.12",
     "eslint": "^9.39.1",
+    "jsdom": "^30.1.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^6.4.1",
-    "vitest": "^3.2.4"
+    "vitest": "^5.0.5"
   },
   "config": {
     "forge": "./forge.config.cjs"

@@ -1,5 +1,9 @@
 import { defineConfig } from 'vitest/config';
 export default defineConfig({ test: {
   include: ['tests/**/*.test.ts'],
-  coverage: { provider: 'v8', include: ['src/core/**/*.ts', 'src/main/store.ts', 'src/main/validation.ts', 'src/renderer/state.ts'], exclude: ['**/*worker*'], reporter: ['text', 'json-summary', 'html'] }
+  coverage: {
+    provider: 'v8',
+    include: ['src/core/engine.ts', 'src/main/persistence.ts', 'src/main/image.ts', 'src/main/security.ts', 'src/main/errors.ts', 'src/renderer/state.ts'],
+    reporter: ['text', 'json-summary', 'html'],
+  }
 } });

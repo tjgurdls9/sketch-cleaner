@@ -20,8 +20,18 @@ jobs:
       - run: npm run lint
       - run: npm run test:coverage
       - run: npm run build
-      - run: npm run test:e2e
       - run: npm run make -- --platform win32 --arch x64
+      - name: Check packaged native image libraries
+        shell: pwsh
+        run: |
+          $native = "out/Sketch Cleaner-win32-x64/resources/app.asar.unpacked/node_modules/@img"
+          if (!(Get-ChildItem $native -Recurse -Filter *.node)) { throw "Native image decoder missing" }
+          if (!(Get-ChildItem $native -Recurse -Filter *vips*.dll)) { throw "Image decoder DLL missing" }
+      - name: Test the packaged desktop app
+        shell: pwsh
+        run: |
+          $env:SKETCH_TEST_EXECUTABLE = (Resolve-Path "out/Sketch Cleaner-win32-x64/SketchCleaner.exe").Path
+          npm run test:e2e
       - uses: actions/upload-artifact@v4
         with:
           name: SketchCleaner-Windows-x64-TEST-unsigned
