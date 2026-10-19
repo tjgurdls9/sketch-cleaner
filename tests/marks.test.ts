@@ -143,6 +143,42 @@ describe('note candidates inside a figure', () => {
     expect(selected(mask, target, 140, 204)).toBe(true);
   });
 
+  it('selects a scissor mark (slash with a curl) but keeps a clean stitch-end slash', () => {
+    const target = canvas(260, 240);
+    stroke(target, 60, 10, 60, 230);
+    stroke(target, 180, 10, 180, 230);
+    stroke(target, 45, 110, 75, 80); // a clean stitch-end slash
+    stroke(target, 165, 110, 195, 80); // scissor slash ...
+    for (let x = 0; x < 26; x += 1) stroke(target, 183 + x, 98 + 4 * Math.sin(x / 3), 184 + x, 98 + 4 * Math.sin((x + 1) / 3), { thickness: 3 }); // ... with a curl
+    const mask = run(target);
+    expect(selected(mask, target, 200, 98)).toBe(true);
+    expect(selected(mask, target, 190, 85)).toBe(true);
+    expect(selected(mask, target, 70, 85)).toBe(false);
+    expect(selected(mask, target, 180, 200)).toBe(false);
+  });
+
+  it('keeps a small closed detail on the drawing, such as a belt loop, and a lone straight stitch segment', () => {
+    const target = canvas(260, 200);
+    stroke(target, 10, 40, 250, 40);
+    stroke(target, 10, 80, 250, 80);
+    stroke(target, 100, 40, 100, 95); stroke(target, 112, 40, 112, 95); stroke(target, 100, 95, 112, 95); // belt loop
+    stroke(target, 40, 150, 100, 150); // a lone straight stitch segment
+    const mask = run(target);
+    expect(selected(mask, target, 100, 88)).toBe(false);
+    expect(selected(mask, target, 106, 95)).toBe(false);
+    expect(selected(mask, target, 70, 150)).toBe(false);
+  });
+
+  it('keeps coloured stitching that runs beside a black seam, selects a coloured line away from seams', () => {
+    const target = canvas(260, 200);
+    stroke(target, 10, 40, 250, 40);
+    stroke(target, 10, 52, 250, 52, { colored: true, thickness: 3 });
+    stroke(target, 10, 150, 250, 150, { colored: true, thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 130, 52)).toBe(false);
+    expect(selected(mask, target, 130, 150)).toBe(true);
+  });
+
   it('returns an empty mask for blank paper', () => {
     const target = canvas(40, 40);
     expect(run(target).some(Boolean)).toBe(false);
