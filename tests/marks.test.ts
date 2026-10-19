@@ -102,7 +102,7 @@ describe('note candidates inside a figure', () => {
     stroke(target, 180, 10, 180, 230);
     stroke(target, 60, 120, 180, 120); // a short-ish crossbar joining both lines (a waistband end)
     stroke(target, 60, 60, 80, 50); stroke(target, 80, 50, 90, 62); // a hook drawn on the seam
-    stroke(target, 180, 180, 198, 172, { thickness: 3 }); stroke(target, 186, 186, 200, 192, { thickness: 3 }); // a loopless symbol
+    stroke(target, 180, 180, 196, 172, { thickness: 3 }); stroke(target, 196, 172, 200, 190, { thickness: 3 }); // a bent mark on the seam
     const mask = run(target);
     expect(selected(mask, target, 80, 52)).toBe(true);
     expect(selected(mask, target, 194, 175)).toBe(true);
