@@ -2001,8 +2001,11 @@ function redo(): void {
   refreshEditSummary();
 }
 
+const NON_TEXT_INPUTS = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'color', 'file']);
+
 function editingField(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
+  // Sliders keep focus after a drag; only text entry should swallow tool shortcuts.
+  return (target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type)) || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
 }
 
 function keyDown(event: KeyboardEvent): void {
