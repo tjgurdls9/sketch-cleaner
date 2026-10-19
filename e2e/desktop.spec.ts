@@ -182,6 +182,8 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
   let app = await launch();
   try {
     let page = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
+    await expect(page.locator('#saveProjectButton')).toBeVisible();
     const pageErrors: string[] = [];
     page.on('pageerror', error => pageErrors.push(error.message));
     await expect(page.getByRole('heading', { name: '정리할 작업 사진을 여세요' })).toBeVisible();
@@ -242,7 +244,6 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     cleaned = await readPersisted();
     expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([255, 255, 255, 255]);
 
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
     await page.locator('#zoomReadout').click();
     await page.locator('#zoom100Button').click();
     await expect(page.locator('#zoomReadout')).toHaveText('100%');
