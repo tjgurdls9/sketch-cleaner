@@ -22,4 +22,4 @@
 | `9eeb2db` | `71e5196` |
 | `a463b37` | `cbf1c30` |
 
-로컬 초기 이력과 GitHub 재생 이력은 서로 다른 계보다. 일반 Git 인증이 복구되면 fetch 후 전체 tree가 같은지 확인하고, GitHub 이력을 후속 개발의 기준으로 사용한다. 원래 로컬 브랜치를 그대로 push하거나 강제로 덮어쓰지 않는다. 연결 도구를 통한 후속 변경도 현재 원격 SHA를 부모로 하고, 예상 head를 검사하는 fast-forward 갱신 또는 PR을 사용한다.
+로컬 초기 이력과 GitHub 재생 이력은 서로 다른 계보다. Git 인증을 통한 fetch 또는 비공개 CI 검증 자료의 `source-history.bundle`로 원격 이력을 가져온 뒤 전체 tree가 같은지 확인하고, GitHub 이력을 후속 개발의 기준으로 사용한다. bundle에는 Git 객체·ref만 포함하고 인증 설정은 포함하지 않는다. 기존 로컬 브랜치는 archive ref로 보존하며, 원래 로컬 브랜치를 그대로 push하거나 강제로 덮어쓰지 않는다. 연결 도구를 통한 후속 변경도 현재 원격 SHA를 부모로 하고, 예상 head를 검사하는 fast-forward 갱신 또는 PR을 사용한다.

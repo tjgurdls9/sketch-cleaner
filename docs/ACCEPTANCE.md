@@ -15,6 +15,7 @@
 | `npm run build` | PASS | main/preload 번들, 로컬 UI, 별도 픽셀 Worker 번들 |
 | `npm run package` | PASS | 개발 호스트 macOS arm64에서 패키지 구조 확인. macOS 배포를 제공한다는 뜻이 아님 |
 | Windows CI 빌드·실행 | PASS | Windows Server 2025 x64의 깨끗한 GitHub runner. 51개 테스트·타입·린트·Squirrel 설치 파일 생성·native DLL 포함·패키징된 앱 E2E 통과. Windows 11 실기기 인수와 다름 |
+| 설치·재설치·제거 | PASS | 실제 Setup 설치, 시작 메뉴 바로가기, 설치된 exe의 E2E, 같은 버전 재설치 및 Update.exe 제거. 기본 프로젝트 폴더의 데이터 표식 SHA-256 보존 확인. 차기 버전 업데이트와 Windows 11 수동 인수는 별도 |
 | `npm audit` | 취약점 0 | 런타임·개발 의존성, lockfile 고정. 향후 신규 취약점이 없음을 보장하지 않음 |
 | `git diff --check` | PASS | 공백·병합 흔적 |
 
@@ -22,11 +23,13 @@ DOM 통합 테스트는 실제 renderer와 픽셀 엔진을 실행하지만, Can
 
 실제 Electron 검증은 [Windows CI 실행 8](https://github.com/tjgurdls9/sketch-cleaner/actions/runs/39206619896)에서 별도로 통과했습니다. 패키징된 앱에서 파일 열기, 실제 Worker 편집, 저장/다시 읽기, 요청 파일, 실제 마우스 올가미·보호, 후보 이동·겹쳐 보기·부분 적용, 최종 PNG의 선택/비선택/완전 보호 픽셀과 원본 해시, 격리 설정을 검사했습니다. 파일 선택 대화상자의 반환값만 테스트에서 지정하며 이미지·Worker·IPC·저장소는 실제 코드를 사용합니다. 화면 캡처도 확인했습니다.
 
+[Windows CI 실행 9](https://github.com/tjgurdls9/sketch-cleaner/actions/runs/39207002773)에서는 설치 폴더를 `%LOCALAPPDATA%\SketchCleanerDesktop`으로 분리한 후 실제 설치·설치된 앱 E2E·동일 버전 재설치·제거 및 `%LOCALAPPDATA%\SketchCleaner\projects`의 표식 데이터 보존까지 통과했습니다. 실제 프로젝트 직렬화/복구는 별도의 파일 저장 테스트에서 검증하며, 설치 표식 검사는 기본 데이터 경로가 설치 프로그램의 삭제 범위 밖에 있다는 회귀 검사입니다.
+
 ## 스펙 인수 항목 대조
 
 | 영역 | 확인한 근거 | 남은 실기기 인수 |
 |---|---|---|
-| 설치·사용성 | Forge Windows x64 Squirrel 설정, 시작 이벤트·바로가기 처리, 한 장 안내 | 개발 도구 없는 Windows 설치/아이콘 실행/업데이트/제거, 비개발자 1인 완료 |
+| 설치·사용성 | 실제 Windows CI 설치·시작 메뉴 바로가기·설치된 앱 E2E·재설치·제거/데이터 보존, 한 장 안내 | 개발 도구 없는 Windows 11 설치/아이콘 실행/차기 버전 업데이트/제거, 비개발자 1인 완료 |
 | 샘플 품질 | AI 결과를 승인 전 후보로 취급 | 업무 사진 10장, 겹친 글씨·붉은 화살표·그림자·기울기 포함 |
 | 원본 무결성 | 실제 파일 테스트에서 원본 바이트·SHA-256 불변, 원본 경로·심볼릭 링크·하드 링크 내보내기 차단 | Windows 실제 파일·백업 설정에서 재확인 |
 | 보호 영역 | 무작위 RGBA 픽셀, P=255의 B 바이트 유지, 추가 보호의 복원/undo, 잘못 저장된 보호 픽셀 거부/이전 저장본 복구 | 실제 도해 100% 검수 |
@@ -57,7 +60,7 @@ DOM 통합 테스트는 실제 renderer와 픽셀 엔진을 실행하지만, Can
 ## 실행 환경 제한과 알려진 한계
 
 - 개발 호스트의 Electron과 headless Chrome이 macOS `_RegisterApplication` 단계에서 SIGABRT로 종료되어 GUI/E2E 실행 검증을 완료하지 못했습니다. 앱 코드 로드 이전 실패이며 성공으로 처리하지 않았습니다.
-- `npm run test:e2e`: 로컬 실행은 실패했지만 Windows Server 2025 CI에서 실제 패키징 앱 E2E는 통과했습니다. 설치 프로그램의 설치/재설치/제거 보존 검사는 추가 검증 중입니다.
+- `npm run test:e2e`: 로컬 실행은 실패했지만 Windows Server 2025 CI에서 실제 설치된 앱 E2E 및 설치/같은 버전 재설치/제거 시 기본 데이터 폴더 보존 검사는 통과했습니다.
 - 개발 호스트의 실제 브라우저도 이 세션에서 기동하지 못했습니다. Windows CI 화면 캡처는 확인했으며, Windows 11 실기기·DPI·업무 사진의 시각 검수는 남아 있습니다.
 - 취소 이력은 세션 내에서만 유지하며 메모리 예산 512MiB에 따라 오래된 이력이 잘릴 수 있습니다. 최소 직전 상태와 기준 변환은 일시적으로 예산을 넘을 수 있음.
 - Worker 결과 버퍼는 전송하고 같은 기준 이미지는 공유하지만 입력 복사·후보·PNG 인코딩은 큰 메모리를 사용합니다. 20MP/25MP 실제 Windows 메모리·응답 시간은 측정하지 못함.
