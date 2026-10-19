@@ -264,8 +264,9 @@ function figureCandidates(snapshot: Snapshot, anchors: readonly { bounds: Bounds
   // Full-size areas around each figure; overlapping areas are merged so no figure line is cut
   // at the edge of an area (a cut line looks short and would read as a note).
   let areas = anchors.map(({ bounds }) => {
+    // A generous margin so notes and lines near the figure are seen whole, not cut at the edge.
     const marginX = Math.max(2, Math.round((bounds.right - bounds.left + 1) * 0.12));
-    const marginY = Math.max(1, Math.round((bounds.bottom - bounds.top + 1) * 0.025));
+    const marginY = Math.max(2, Math.round((bounds.bottom - bounds.top + 1) * 0.08));
     return {
       left: Math.max(0, Math.floor((bounds.left - marginX) * width / gridWidth)),
       right: Math.min(width, Math.ceil((bounds.right + marginX + 1) * width / gridWidth)),

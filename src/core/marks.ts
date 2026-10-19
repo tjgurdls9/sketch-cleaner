@@ -316,9 +316,18 @@ export const MARK_RULES = {
   slashStraight: 0.85,
   hostMin: 8,
   lineRun: 24,
+  sweepLine: 16,
+  scribbleMax: 35,
+  loneStroke: 10,
+  scissorExtra: 3,
+  scissorReach: 7,
+  scissorCurl: 0.85,
+  scissorCurlMin: 5,
   bridgeMax: 5,
   tinyPiece: 1.5,
   dashGap: 5,
+  stitchGap: 5,
+  stitchShare: 0.6,
   crossAngle: 25,
   outlineAngle: 40,
   wavyMin: 12,
@@ -335,6 +344,50 @@ function lineAngle(a: readonly [number, number], b: readonly [number, number]): 
  * Returns a 0/255 mask of annotation ink inside a figure crop. Pixels that also belong to a
  * kept drawing line are left out, so filling the mask never breaks the drawing.
  */
+/**
+ * Pieces that lie on a closed loop of the line graph (not bridges). Belt loops, pockets and
+ * waistband ends close up with the drawing; notes hang off it at one end.
+ */
+function piecesOnLoops(segments: readonly Segment[]): Set<Segment> {
+  const adjacency = new Map<number, Array<{ to: number; edge: number }>>();
+  segments.forEach((segment, edge) => {
+    const [a, b] = segment.nodes;
+    adjacency.set(a, [...(adjacency.get(a) ?? []), { to: b, edge }]);
+    if (a !== b) adjacency.set(b, [...(adjacency.get(b) ?? []), { to: a, edge }]);
+  });
+  const order = new Map<number, number>();
+  const low = new Map<number, number>();
+  const bridges = new Set<number>();
+  let counter = 0;
+  for (const root of adjacency.keys()) {
+    if (order.has(root)) continue;
+    // Iterative depth-first search (Tarjan) so large drawings do not overflow the stack.
+    const stack: Array<{ node: number; via: number; next: number }> = [{ node: root, via: -1, next: 0 }];
+    order.set(root, counter); low.set(root, counter); counter += 1;
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const links = adjacency.get(frame.node) ?? [];
+      if (frame.next < links.length) {
+        const { to, edge } = links[frame.next++];
+        if (edge === frame.via) continue;
+        if (!order.has(to)) {
+          order.set(to, counter); low.set(to, counter); counter += 1;
+          stack.push({ node: to, via: edge, next: 0 });
+        } else {
+          low.set(frame.node, Math.min(low.get(frame.node)!, order.get(to)!));
+        }
+        continue;
+      }
+      stack.pop();
+      const parent = stack[stack.length - 1];
+      if (!parent) continue;
+      low.set(parent.node, Math.min(low.get(parent.node)!, low.get(frame.node)!));
+      if (low.get(frame.node)! > order.get(parent.node)!) bridges.add(frame.via);
+    }
+  }
+  return new Set(segments.filter((_, edge) => !bridges.has(edge)));
+}
+
 export function findAnnotationInk(figure: FigureInk, width: number, height: number, stats?: MarkStats): Uint8Array {
   const { ink, colored, text } = figure;
   const result = new Uint8Array(ink.length);
@@ -515,16 +568,90 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       queue.push(next);
     }
   }
+  // A scissor mark is a slash over a seam with a curl or loop drawn right beside it; a
+  // stitch-end slash is a single clean stroke. Take scissor marks out of the kept set.
+  const scissors = new Set<Segment>();
+  const curly = (piece: Segment): boolean => !keep.has(piece) && !isDash(piece) && units(piece) < MARK_RULES.lineRun
+    && (straightness(piece, width) < MARK_RULES.scissorCurl || lineRunOf(piece, MARK_RULES.outlineAngle) < MARK_RULES.sweepLine);
+  const near = (piece: Segment, x: number, y: number, radius: number): boolean => piece.points.some(index => {
+    const [px, py] = xy(index, width);
+    return (px - x) ** 2 + (py - y) ** 2 <= radius * radius;
+  });
+  for (const piece of keep) {
+    if (isWavy(piece)) continue;
+    const radius = strokeWidth * MARK_RULES.scissorReach;
+    const crossings = [piece.points[0], piece.points[piece.points.length - 1]].map(index => xy(index, width));
+    // Only pieces fastened to the slash or to the seam count; writing beside a slash floats free.
+    const fastened = (other: Segment): boolean => other.nodes.some(node => (atNode.get(node) ?? [])
+      .some(peer => peer === piece || lineRunOf(peer, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun));
+    const extras = segments.filter(other => other !== piece && curly(other) && fastened(other)
+      && crossings.some(([x, y]) => near(other, x, y, radius)));
+    if (extras.reduce((sum, other) => sum + units(other), 0) < MARK_RULES.scissorExtra) continue;
+    // Scissors carry a real curl or loop; short straight bits beside a slash (the corner of a
+    // stitch line) do not make it a scissor mark.
+    if (!extras.some(other => straightness(other, width) < MARK_RULES.scissorCurl && units(other) >= MARK_RULES.scissorCurlMin)) continue;
+    scissors.add(piece);
+    for (const other of extras) scissors.add(other);
+  }
+  for (let grown = true; grown;) {
+    grown = false;
+    for (const piece of keep) {
+      if (scissors.has(piece) || isWavy(piece)) continue;
+      if (piece.nodes.some(node => (atNode.get(node) ?? []).some(other => scissors.has(other) && keep.has(other)))) { scissors.add(piece); grown = true; }
+    }
+  }
+  for (const piece of scissors) keep.delete(piece);
   const isDrawing = (segment: Segment): boolean => keep.has(segment) || isDash(segment)
     || lineRunOf(segment, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun;
 
+  // Black drawing-line centre points by grid cell, for the stitching test below.
+  const seamCell = Math.max(4, Math.round(strokeWidth * MARK_RULES.stitchGap));
+  const seams = new Map<number, Array<{ x: number; y: number; dir: [number, number] }>>();
+  for (const segment of segments) {
+    if (share(segment, colored) >= 0.5 || lineRunOf(segment, MARK_RULES.outlineAngle) < MARK_RULES.lineRun) continue;
+    const step = Math.max(1, Math.round(strokeWidth));
+    for (let i = step; i < segment.points.length - step; i += step) {
+      const [x, y] = xy(segment.points[i], width);
+      const [ax, ay] = xy(segment.points[i - step], width);
+      const [bx, by] = xy(segment.points[i + step], width);
+      const length = Math.hypot(bx - ax, by - ay) || 1;
+      const key = Math.floor(y / seamCell) * 1_000_003 + Math.floor(x / seamCell);
+      seams.set(key, [...(seams.get(key) ?? []), { x, y, dir: [(bx - ax) / length, (by - ay) / length] }]);
+    }
+  }
+  const alongSeam = (segment: Segment): boolean => {
+    const step = Math.max(1, Math.round(strokeWidth));
+    let samples = 0;
+    let beside = 0;
+    for (let i = step; i < segment.points.length - step; i += step) {
+      const [x, y] = xy(segment.points[i], width);
+      const [ax, ay] = xy(segment.points[i - step], width);
+      const [bx, by] = xy(segment.points[i + step], width);
+      const length = Math.hypot(bx - ax, by - ay) || 1;
+      const dir: [number, number] = [(bx - ax) / length, (by - ay) / length];
+      samples += 1;
+      const cx = Math.floor(x / seamCell);
+      const cy = Math.floor(y / seamCell);
+      let found = false;
+      for (let gy = cy - 1; gy <= cy + 1 && !found; gy += 1) {
+        for (let gx = cx - 1; gx <= cx + 1 && !found; gx += 1) {
+          found = (seams.get(gy * 1_000_003 + gx) ?? []).some(point => Math.hypot(point.x - x, point.y - y) <= seamCell
+            && lineAngle(point.dir, dir) <= MARK_RULES.crossAngle);
+        }
+      }
+      if (found) beside += 1;
+    }
+    return samples > 0 && beside / samples >= MARK_RULES.stitchShare;
+  };
+
   // --- Annotation ---------------------------------------------------------------------------
-  const marked = new Set<Segment>();
+  const marked = new Set<Segment>(scissors);
   const writing = new Set<Segment>();
   for (const segment of segments) {
     if (keep.has(segment)) continue;
-    // Coloured solid lines (e.g. a blue belt position) are notes; coloured dashes are stitches.
-    if (share(segment, colored) >= 0.5 && !isDash(segment)) { marked.add(segment); continue; }
+    // Coloured solid lines (e.g. a blue belt position) are notes; coloured dashes, and coloured
+    // stitching running close beside a black seam, are stitches.
+    if (share(segment, colored) >= 0.5 && !isDash(segment) && !alongSeam(segment)) { marked.add(segment); continue; }
     if (share(segment, text) >= 0.5 && !isDrawing(segment)) { marked.add(segment); writing.add(segment); }
   }
   // A leader is a line from the writing that is not continued straight on at the writing and
@@ -540,8 +667,11 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       const far = otherNode(current, at);
       if (isEnd(far)) return chain;
       const next = straightOn(current, far);
+      const runsOn = next !== undefined && lineRunOf(next, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun;
+      // A drawing line that merely touches a note runs straight on past it: not a leader.
+      if (hops === 0 && runsOn && !isEnd(far)) return undefined;
       // A leader ends where it meets the drawing; it never runs on into a long drawing line.
-      if (!next || marked.has(next) || keep.has(next) || isDash(next) || lineRunOf(next, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun) return chain;
+      if (!next || marked.has(next) || keep.has(next) || isDash(next) || runsOn) return chain;
       current = next;
       at = far;
     }
@@ -582,18 +712,59 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       .filter(({ along }) => along[0] * back[0] + along[1] * back[1] > 0)
       .sort((a, b) => (b.along[0] * back[0] + b.along[1] * back[1]) - (a.along[0] * back[0] + a.along[1] * back[1]))[0]?.piece;
     if (!shaft) continue;
+    // An arrow's shaft ends at the tip; a seam that runs on past the "tip" is crossed by a mark.
+    const along = direction(shaft, node, reach, width);
+    const runsPast = pieces.some(piece => piece !== shaft && !heads.includes(piece) && (() => {
+      const other = direction(piece, node, reach, width);
+      return along[0] * other[0] + along[1] * other[1] < -Math.cos(MARK_RULES.crossAngle * Math.PI / 180);
+    })());
+    if (runsPast) continue;
     for (const piece of [...heads, ...(traceLeader(shaft, node) ?? [shaft])]) marked.add(piece);
   }
   // Err on the side of selecting: anything that is not a drawing line, a dash, a stitch-end
   // slash or a zipper line is a candidate, unless it joins two drawing lines (a waistband end).
   // Hand-drawn outlines bend a little wherever a detail joins them, so follow them loosely here.
-  const isLine = (segment: Segment): boolean => lineRunOf(segment, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun || units(segment) >= MARK_RULES.lineRun
+  const isLine = (segment: Segment): boolean => lineRunOf(segment, MARK_RULES.outlineAngle) >= MARK_RULES.sweepLine || units(segment) >= MARK_RULES.sweepLine
     // In a small crop a piece that big is the figure itself, not a note.
     || segment.length > Math.max(width, height) * MARK_RULES.scribbleShare;
   const holdsLine = (node: number, except: Segment): boolean => (atNode.get(node) ?? [])
     .some(other => other !== except && (keep.has(other) || isLine(other)));
+  // Small groups that touch no drawing line at all: handwriting, an isolated scribble.
+  const grouped = new Set<Segment>();
+  for (const start of segments) {
+    if (grouped.has(start)) continue;
+    const group: Segment[] = [start];
+    grouped.add(start);
+    for (let head = 0; head < group.length; head += 1) {
+      for (const node of group[head].nodes) {
+        for (const next of atNode.get(node) ?? []) if (!grouped.has(next)) { grouped.add(next); group.push(next); }
+      }
+    }
+    const total = group.reduce((sum, segment) => sum + units(segment), 0);
+    if (total > MARK_RULES.scribbleMax || total * strokeWidth > Math.max(width, height) * MARK_RULES.scribbleShare) continue;
+    if (group.some(segment => keep.has(segment) || isDash(segment))) continue;
+    if (group.every(segment => share(segment, colored) >= 0.5 && alongSeam(segment))) continue;
+    // A long single straight stroke on its own is a stitch or seam segment, not writing.
+    if (group.length === 1 && straightness(group[0], width) >= MARK_RULES.slashStraight && units(group[0]) >= MARK_RULES.loneStroke) continue;
+    for (const segment of group) marked.add(segment);
+  }
+  // A piece cut by the edge of the area cannot be judged whole; leave it alone.
+  const edge = Math.max(2, Math.round(strokeWidth));
+  const atBorder = (segment: Segment): boolean => segment.points.some(index => {
+    const [x, y] = xy(index, width);
+    return x < edge || y < edge || x >= width - edge || y >= height - edge;
+  });
+  for (const segment of [...marked]) if (atBorder(segment) && !scissors.has(segment) && share(segment, colored) < 0.5) marked.delete(segment);
+  // Short straight strokes standing off a long line at an angle look like stitch-end slashes
+  // (or the half of one beyond the crossing): leave them to the person rather than erase.
+  const slashLike = (segment: Segment): boolean => freeEnds(segment).length === 1 && straightness(segment, width) >= MARK_RULES.slashStraight
+    && units(segment) >= MARK_RULES.slashMin && units(segment) <= MARK_RULES.slashMax && segment.nodes.some(node => !isEnd(node)
+      && (atNode.get(node) ?? []).some(other => other !== segment && lineRunOf(other, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun
+        && lineAngle(direction(segment, node, reach, width), direction(other, node, reach, width)) >= MARK_RULES.crossAngle));
+  const looped = piecesOnLoops(segments);
   for (const segment of segments) {
-    if (marked.has(segment) || keep.has(segment) || isDash(segment) || isLine(segment)) continue;
+    if (marked.has(segment) || keep.has(segment) || isDash(segment) || isLine(segment) || atBorder(segment) || slashLike(segment) || looped.has(segment)
+      || (share(segment, colored) >= 0.5 && alongSeam(segment))) continue;
     const joins = segment.nodes.every(node => !isEnd(node) && holdsLine(node, segment));
     if (!joins) marked.add(segment);
   }
