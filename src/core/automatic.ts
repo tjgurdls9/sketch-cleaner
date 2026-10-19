@@ -296,9 +296,11 @@ function figureCandidates(snapshot: Snapshot, anchors: readonly { bounds: Bounds
       for (let x = left; x < right; x += 1) {
         const index = y * width + x;
         const cell = ((y - top) / scale | 0) * cropWidth + ((x - left) / scale | 0);
-        const blue = isBlueInk(data, index * 4);
-        if (blue || pixelKind(data, index * 4) === 'ink') ink[cell] = 1;
-        if (blue) colored[cell] = 1;
+        // Coloured ink takes part in the line graph so a red mark over a seam does not cut it.
+        const kind = pixelKind(data, index * 4);
+        const tinted = kind === 'red' || isBlueInk(data, index * 4);
+        if (tinted || kind === 'ink') ink[cell] = 1;
+        if (tinted) colored[cell] = 1;
         if (text && textMask?.[index] === 255) text[cell] = 255;
       }
     }

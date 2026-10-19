@@ -28,6 +28,8 @@ export interface FigureInk {
 }
 
 const MAX_THINNING_ROUNDS = 25;
+const WIDTH_SAMPLES = 2000;
+const MAX_STROKE_RUN = 60;
 const NEIGHBORS = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]] as const;
 
 function thin(ink: Uint8Array, width: number, height: number): Uint8Array {
@@ -83,6 +85,41 @@ function thin(ink: Uint8Array, width: number, height: number): Uint8Array {
     candidates = candidates.filter(index => skeleton[index]);
   }
   return skeleton;
+}
+
+/**
+ * Median pen width measured across the strokes at centre-line pixels. A median, unlike total
+ * ink over centre-line length, is not thrown off by a solid dark area (a scan border).
+ */
+function typicalStrokeWidth(ink: Uint8Array, skeleton: Uint8Array, width: number, height: number): number {
+  const centre: number[] = [];
+  for (let index = 0; index < skeleton.length; index += 1) if (skeleton[index]) centre.push(index);
+  if (!centre.length) return 0;
+  const step = Math.max(1, Math.floor(centre.length / WIDTH_SAMPLES));
+  const run = (x: number, y: number, dx: number, dy: number): number => {
+    let length = 0;
+    for (let at = 1; at < MAX_STROKE_RUN; at += 1) {
+      const px = x + dx * at;
+      const py = y + dy * at;
+      if (px < 0 || py < 0 || px >= width || py >= height || !ink[py * width + px]) break;
+      length += 1;
+    }
+    return length;
+  };
+  const widths: number[] = [];
+  for (let order = 0; order < centre.length; order += step) {
+    const x = centre[order] % width;
+    const y = (centre[order] / width) | 0;
+    // The narrowest of four directions is close to the true width at any stroke angle.
+    widths.push(Math.min(
+      run(x, y, 1, 0) + run(x, y, -1, 0) + 1,
+      run(x, y, 0, 1) + run(x, y, 0, -1) + 1,
+      (run(x, y, 1, 1) + run(x, y, -1, -1) + 1) * Math.SQRT2,
+      (run(x, y, 1, -1) + run(x, y, -1, 1) + 1) * Math.SQRT2,
+    ));
+  }
+  widths.sort((a, b) => a - b);
+  return Math.max(1, widths[widths.length >> 1]);
 }
 
 function neighbours(skeleton: Uint8Array, width: number, height: number, index: number): number[] {
@@ -147,6 +184,23 @@ function trace(skeleton: Uint8Array, width: number, height: number): { segments:
     }
   }
   return { segments, nodeOf };
+}
+
+/** Merges nodes joined by pieces shorter than `tiny`: one crossing or tip often thins into a few nodes. */
+function contractTinyPieces(traced: readonly Segment[], tiny: number): Segment[] {
+  const parent = new Map<number, number>();
+  const root = (node: number): number => {
+    let current = node;
+    while (parent.has(current) && parent.get(current) !== current) current = parent.get(current)!;
+    return current;
+  };
+  const kept: Segment[] = [];
+  for (const segment of traced) {
+    const [a, b] = segment.nodes;
+    if (a !== b && segment.length < tiny) parent.set(root(a), root(b));
+    else kept.push(segment);
+  }
+  return kept.map(segment => ({ ...segment, nodes: [root(segment.nodes[0]), root(segment.nodes[1])] }));
 }
 
 /** Joins pieces that meet at a node shared by exactly two pieces: that node is a pass-through, not a junction. */
@@ -255,18 +309,18 @@ export function swing(segment: Segment, width: number, strokeWidth: number): num
 
 export const MARK_RULES = {
   slashMin: 1.5,
-  scribbleMax: 35,
-  scribbleShare: 0.15,
-  arrowHeadMax: 6,
-  symbolSpan: 10,
-  symbolMin: 4,
+  scribbleShare: 0.5,
+  arrowHeadMax: 9,
+  arrowSpread: [15, 160],
   slashMax: 18,
   slashStraight: 0.85,
   hostMin: 8,
   lineRun: 24,
   bridgeMax: 5,
+  tinyPiece: 1.5,
   dashGap: 5,
   crossAngle: 25,
+  outlineAngle: 40,
   wavyMin: 12,
   wavyWiggle: 0.5,
   wavySwing: 0.25,
@@ -285,12 +339,9 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
   const { ink, colored, text } = figure;
   const result = new Uint8Array(ink.length);
   const skeleton = thin(ink, width, height);
-  let inkCount = 0;
-  let skeletonCount = 0;
-  for (let index = 0; index < ink.length; index += 1) { inkCount += ink[index]; skeletonCount += skeleton[index]; }
-  if (!skeletonCount) return result;
-  const strokeWidth = Math.max(1, inkCount / skeletonCount);
-  const { segments, atNode } = joinThroughNodes(trace(skeleton, width, height).segments);
+  const strokeWidth = typicalStrokeWidth(ink, skeleton, width, height);
+  if (!strokeWidth) return result;
+  const { segments, atNode } = joinThroughNodes(contractTinyPieces(trace(skeleton, width, height).segments, strokeWidth * MARK_RULES.tinyPiece));
   const isEnd = (node: number): boolean => (atNode.get(node)?.length ?? 0) === 1;
   const reach = strokeWidth * 4;
   const units = (segment: Segment): number => segment.length / strokeWidth;
@@ -340,9 +391,9 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
   };
   // The piece at `node` that continues `from` in a straight line. A piece that lines up even
   // better with some other piece belongs to that line (e.g. a seam the slash crosses).
-  const straightOnAt = (from: Segment, node: number, own: readonly [number, number]): Segment | undefined => {
+  const straightOnAt = (from: Segment, node: number, own: readonly [number, number], angle = MARK_RULES.crossAngle): Segment | undefined => {
     let best: Segment | undefined;
-    let bestDot = -Math.cos(MARK_RULES.crossAngle * Math.PI / 180);
+    let bestDot = -Math.cos(angle * Math.PI / 180);
     for (const other of atNode.get(node) ?? []) {
       if (other === from) continue;
       const next = direction(other, node, reach, width);
@@ -370,13 +421,13 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     return undefined;
   };
   // Total length (in stroke widths) of the straight line a piece is part of.
-  const lineRunOf = (segment: Segment): number => {
+  const lineRunOf = (segment: Segment, angle = MARK_RULES.crossAngle): number => {
     let total = segment.length;
     for (const start of segment.nodes) {
       let current = segment;
       let at = start;
       for (let hops = 0; hops < 8 && !isEnd(at); hops += 1) {
-        const next = straightOnAt(current, at, direction(current, at, reach, width));
+        const next = straightOnAt(current, at, direction(current, at, reach, width), angle);
         if (!next || next === segment) break;
         total += next.length;
         at = otherNode(next, at);
@@ -435,6 +486,11 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     const hosts = (atNode.get(junction) ?? []).filter(other => other !== segment && units(other) >= MARK_RULES.hostMin
       && other.nodes[0] !== other.nodes[1] && lineRunOf(other) >= MARK_RULES.lineRun);
     if (!hosts.some(host => lineAngle(own, direction(host, junction, reach, width)) >= MARK_RULES.crossAngle)) return false;
+    // A slash crosses a line that runs on through the crossing; an arrowhead sits where its
+    // shaft ends, with only the other head stroke beside it.
+    const through = (atNode.get(junction) ?? []).filter(other => other !== segment
+      && !(freeEnds(other).length && units(other) <= MARK_RULES.arrowHeadMax));
+    if (through.length < 2) return false;
     // A drawing line that just overshoots another line keeps going; a slash ends soon.
     return !continuesAsLine(segment, junction) && !isDash(segment);
   };
@@ -459,7 +515,8 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       queue.push(next);
     }
   }
-  const isDrawing = (segment: Segment): boolean => keep.has(segment) || isDash(segment) || lineRunOf(segment) >= MARK_RULES.lineRun;
+  const isDrawing = (segment: Segment): boolean => keep.has(segment) || isDash(segment)
+    || lineRunOf(segment, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun;
 
   // --- Annotation ---------------------------------------------------------------------------
   const marked = new Set<Segment>();
@@ -484,7 +541,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       if (isEnd(far)) return chain;
       const next = straightOn(current, far);
       // A leader ends where it meets the drawing; it never runs on into a long drawing line.
-      if (!next || marked.has(next) || keep.has(next) || isDash(next) || lineRunOf(next) >= MARK_RULES.lineRun) return chain;
+      if (!next || marked.has(next) || keep.has(next) || isDash(next) || lineRunOf(next, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun) return chain;
       current = next;
       at = far;
     }
@@ -511,51 +568,34 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       if (!chain.includes(head) && !keep.has(head) && units(head) <= MARK_RULES.arrowHeadMax && freeEnds(head).length) marked.add(head);
     }
   }
-  // Compact clusters of short pieces hanging off the drawing with a closed loop: scissor marks
-  // and similar symbols drawn over a seam.
-  const minor = (segment: Segment): boolean => !keep.has(segment) && !isDash(segment)
-    && units(segment) <= MARK_RULES.scribbleMax && lineRunOf(segment) < MARK_RULES.lineRun;
-  const clustered = new Set<Segment>();
-  for (const start of segments) {
-    if (clustered.has(start) || !minor(start)) continue;
-    const group: Segment[] = [start];
-    clustered.add(start);
-    for (let head = 0; head < group.length; head += 1) {
-      for (const node of group[head].nodes) {
-        for (const next of atNode.get(node) ?? []) if (!clustered.has(next) && minor(next)) { clustered.add(next); group.push(next); }
-      }
-    }
-    const total = group.reduce((sum, segment) => sum + units(segment), 0);
-    const nodes = new Set(group.flatMap(segment => segment.nodes));
-    const looped = group.length >= nodes.size || group.some(segment => segment.nodes[0] === segment.nodes[1]);
-    let [minX, minY, maxX, maxY] = [width, height, 0, 0];
-    for (const segment of group) for (const index of segment.points) {
-      const [x, y] = xy(index, width);
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-    }
-    // A broken drawing line also splits into many small pieces, but it stretches out long.
-    const compact = Math.max(maxX - minX, maxY - minY) / strokeWidth <= MARK_RULES.symbolSpan;
-    if (group.length >= 2 && looped && compact && total >= MARK_RULES.symbolMin && total <= MARK_RULES.scribbleMax * 1.5) {
-      for (const segment of group) marked.add(segment);
-    }
+  // Arrows with no note: two short straight strokes meeting at a tip with a shaft behind them.
+  // Take the head, the shaft and whatever runs on straight from the shaft's far end.
+  for (const [node, pieces] of atNode) {
+    const heads = pieces.filter(piece => !keep.has(piece) && freeEnds(piece).length && units(piece) <= MARK_RULES.arrowHeadMax);
+    if (heads.length < 2) continue;
+    const [first, second] = heads.map(piece => direction(piece, node, reach, width));
+    const spread = Math.acos(Math.max(-1, Math.min(1, first[0] * second[0] + first[1] * second[1]))) * 180 / Math.PI;
+    if (spread < MARK_RULES.arrowSpread[0] || spread > MARK_RULES.arrowSpread[1]) continue;
+    const back = [first[0] + second[0], first[1] + second[1]];
+    const shaft = pieces.filter(piece => !heads.includes(piece) && !keep.has(piece) && !isDash(piece))
+      .map(piece => ({ piece, along: direction(piece, node, reach, width) }))
+      .filter(({ along }) => along[0] * back[0] + along[1] * back[1] > 0)
+      .sort((a, b) => (b.along[0] * back[0] + b.along[1] * back[1]) - (a.along[0] * back[0] + a.along[1] * back[1]))[0]?.piece;
+    if (!shaft) continue;
+    for (const piece of [...heads, ...(traceLeader(shaft, node) ?? [shaft])]) marked.add(piece);
   }
-  // Small scribbles that touch nothing long (handwriting the detector missed, scissor marks).
-  const seen = new Set<Segment>();
-  for (const start of segments) {
-    if (seen.has(start)) continue;
-    const group: Segment[] = [start];
-    seen.add(start);
-    for (let head = 0; head < group.length; head += 1) {
-      for (const node of group[head].nodes) {
-        for (const next of atNode.get(node) ?? []) if (!seen.has(next)) { seen.add(next); group.push(next); }
-      }
-    }
-    const total = group.reduce((sum, segment) => sum + units(segment), 0);
-    if (total > MARK_RULES.scribbleMax || group.some(segment => keep.has(segment) || isDash(segment))) continue;
-    // Never the figure itself: a scribble is small next to the area being looked at.
-    if (total * strokeWidth > Math.max(width, height) * MARK_RULES.scribbleShare) continue;
-    const straightSingle = group.length === 1 && straightness(group[0], width) >= MARK_RULES.slashStraight;
-    if (!straightSingle) for (const segment of group) marked.add(segment);
+  // Err on the side of selecting: anything that is not a drawing line, a dash, a stitch-end
+  // slash or a zipper line is a candidate, unless it joins two drawing lines (a waistband end).
+  // Hand-drawn outlines bend a little wherever a detail joins them, so follow them loosely here.
+  const isLine = (segment: Segment): boolean => lineRunOf(segment, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun || units(segment) >= MARK_RULES.lineRun
+    // In a small crop a piece that big is the figure itself, not a note.
+    || segment.length > Math.max(width, height) * MARK_RULES.scribbleShare;
+  const holdsLine = (node: number, except: Segment): boolean => (atNode.get(node) ?? [])
+    .some(other => other !== except && (keep.has(other) || isLine(other)));
+  for (const segment of segments) {
+    if (marked.has(segment) || keep.has(segment) || isDash(segment) || isLine(segment)) continue;
+    const joins = segment.nodes.every(node => !isEnd(node) && holdsLine(node, segment));
+    if (!joins) marked.add(segment);
   }
 
   const radius = Math.ceil(strokeWidth / 2) + 1;
