@@ -27,31 +27,35 @@ export interface FigureInk {
   text?: Uint8Array;
 }
 
+const MAX_THINNING_ROUNDS = 25;
 const NEIGHBORS = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]] as const;
 
 function thin(ink: Uint8Array, width: number, height: number): Uint8Array {
   const skeleton = ink.slice();
   const at = (x: number, y: number): number => (x < 0 || y < 0 || x >= width || y >= height ? 0 : skeleton[y * width + x]);
+  // ring[0..7] = N, NE, E, SE, S, SW, W, NW (Zhang-Suen p2..p9), reused to avoid per-pixel allocation.
+  const ring = new Uint8Array(8);
+  const readRing = (x: number, y: number): number => {
+    ring[0] = at(x, y - 1); ring[1] = at(x + 1, y - 1); ring[2] = at(x + 1, y); ring[3] = at(x + 1, y + 1);
+    ring[4] = at(x, y + 1); ring[5] = at(x - 1, y + 1); ring[6] = at(x - 1, y); ring[7] = at(x - 1, y - 1);
+    return ring[0] + ring[1] + ring[2] + ring[3] + ring[4] + ring[5] + ring[6] + ring[7];
+  };
   let candidates: number[] = [];
   for (let index = 0; index < skeleton.length; index += 1) if (skeleton[index]) candidates.push(index);
-  for (let changed = true; changed;) {
+  // Pen strokes thin out in a few passes; solid dark areas would take hundreds, so stop early.
+  for (let changed = true, round = 0; changed && round < MAX_THINNING_ROUNDS; round += 1) {
     changed = false;
     for (const pass of [0, 1]) {
       const remove: number[] = [];
       for (const index of candidates) {
         if (!skeleton[index]) continue;
-        const x = index % width;
-        const y = (index / width) | 0;
-        const p = NEIGHBORS.map(([dx, dy]) => at(x + dx, y + dy));
-        // Zhang-Suen order starting at north: p2..p9 = N, NE, E, SE, S, SW, W, NW.
-        const [nw, n, ne, e, se, s, sw, w] = p;
-        const ring = [n, ne, e, se, s, sw, w, nw];
-        const count = ring.reduce((sum, value) => sum + value, 0);
+        const count = readRing(index % width, (index / width) | 0);
         if (count < 2 || count > 6) continue;
         let transitions = 0;
-        for (let i = 0; i < 8; i += 1) if (!ring[i] && ring[(i + 1) % 8]) transitions += 1;
+        for (let i = 0; i < 8; i += 1) if (!ring[i] && ring[(i + 1) & 7]) transitions += 1;
         if (transitions !== 1) continue;
-        if (pass === 0 ? (n && e && s) || (e && s && w) : (n && e && w) || (n && s && w)) continue;
+        const [n, , e, , south, , w] = ring;
+        if (pass === 0 ? (n && e && south) || (e && south && w) : (n && e && w) || (n && south && w)) continue;
         remove.push(index);
       }
       for (const index of remove) skeleton[index] = 0;
@@ -65,16 +69,12 @@ function thin(ink: Uint8Array, width: number, height: number): Uint8Array {
     changed = false;
     for (const index of candidates) {
       if (!skeleton[index]) continue;
-      const x = index % width;
-      const y = (index / width) | 0;
-      // Yokoi order: E, NE, N, NW, W, SW, S, SE.
-      const ring = [at(x + 1, y), at(x + 1, y - 1), at(x, y - 1), at(x - 1, y - 1), at(x - 1, y), at(x - 1, y + 1), at(x, y + 1), at(x + 1, y + 1)];
-      const count = ring.reduce((sum, value) => sum + value, 0);
-      if (count < 2) continue;
+      if (readRing(index % width, (index / width) | 0) < 2) continue;
+      // Yokoi 8-connectivity number over the four edge neighbours (N, E, S, W) and their corners.
       let connectivity = 0;
-      for (const k of [0, 2, 4, 6]) {
-        const empty = (i: number): number => 1 - ring[i % 8];
-        connectivity += empty(k) - empty(k) * empty(k + 1) * empty(k + 2);
+      for (const k of [2, 0, 6, 4]) {
+        const edge = 1 - ring[k];
+        connectivity += edge - edge * (1 - ring[(k + 7) & 7]) * (1 - ring[(k + 6) & 7]);
       }
       if (connectivity !== 1) continue;
       skeleton[index] = 0;
@@ -463,11 +463,12 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
 
   // --- Annotation ---------------------------------------------------------------------------
   const marked = new Set<Segment>();
+  const writing = new Set<Segment>();
   for (const segment of segments) {
     if (keep.has(segment)) continue;
     // Coloured solid lines (e.g. a blue belt position) are notes; coloured dashes are stitches.
     if (share(segment, colored) >= 0.5 && !isDash(segment)) { marked.add(segment); continue; }
-    if (share(segment, text) >= 0.5 && !isDrawing(segment)) marked.add(segment);
+    if (share(segment, text) >= 0.5 && !isDrawing(segment)) { marked.add(segment); writing.add(segment); }
   }
   // A leader is a line from the writing that is not continued straight on at the writing and
   // ends where it meets the drawing (a T) or in blank paper. A drawing line that merely
@@ -482,7 +483,8 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       const far = otherNode(current, at);
       if (isEnd(far)) return chain;
       const next = straightOn(current, far);
-      if (!next || marked.has(next) || keep.has(next) || isDash(next)) return chain;
+      // A leader ends where it meets the drawing; it never runs on into a long drawing line.
+      if (!next || marked.has(next) || keep.has(next) || isDash(next) || lineRunOf(next) >= MARK_RULES.lineRun) return chain;
       current = next;
       at = far;
     }
@@ -493,7 +495,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     if (keep.has(segment) || marked.has(segment)) continue;
     for (const node of segment.nodes) {
       const touchesNote = isEnd(node) ? nearText(freeEnds(segment).find(([end]) => end === node)?.[1] ?? segment.points[0])
-        : (atNode.get(node) ?? []).some(other => other !== segment && marked.has(other));
+        : (atNode.get(node) ?? []).some(other => other !== segment && writing.has(other));
       if (!touchesNote) continue;
       const onward = isEnd(node) ? undefined : straightOn(segment, node);
       if (onward && !marked.has(onward)) continue;

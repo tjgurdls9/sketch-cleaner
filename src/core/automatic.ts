@@ -1,6 +1,6 @@
 import type { Snapshot } from '../shared/types';
 import { findAnnotationInk } from './marks';
-import { splitRuledComponent } from './ruled';
+import { findRuledLines, splitRuledComponent, type RuledLine } from './ruled';
 
 export const MAX_AUTO_ANALYSIS_PIXELS = 1_000_000;
 /** Figure crops larger than this are analysed at a reduced scale for note candidates. */
@@ -177,6 +177,75 @@ function labelComponentFlags(components: readonly Bounds[], gridPixels: number, 
   return flags;
 }
 
+/** A printed table rule is at most this share of the pen width of the drawing beside it. */
+export const PRINTED_RULE_SHARE = 0.8;
+const WIDTH_SAMPLES = 81;
+
+function boundsOf(cells: readonly number[], gridWidth: number): Bounds {
+  const bounds: Bounds = { left: Infinity, top: Infinity, right: -1, bottom: -1, count: cells.length };
+  for (const cell of cells) {
+    const x = cell % gridWidth;
+    const y = (cell / gridWidth) | 0;
+    bounds.left = Math.min(bounds.left, x); bounds.right = Math.max(bounds.right, x);
+    bounds.top = Math.min(bounds.top, y); bounds.bottom = Math.max(bounds.bottom, y);
+  }
+  return bounds;
+}
+
+/** Longest run of dark ink through the full-size image along one axis, within `reach` of (x, y). */
+function inkRun(snapshot: Snapshot, x: number, y: number, vertical: boolean, reach: number): number {
+  const { width, height, data } = snapshot.working;
+  let best = 0;
+  let run = 0;
+  for (let step = -reach; step <= reach; step += 1) {
+    const px = vertical ? x : x + step;
+    const py = vertical ? y + step : y;
+    const on = px >= 0 && py >= 0 && px < width && py < height && pixelKind(data, (py * width + px) * 4) === 'ink';
+    run = on ? run + 1 : 0;
+    best = Math.max(best, run);
+  }
+  // Ink filling the whole window is a solid dark area, not a line: no width to report.
+  return best > reach * 2 ? 0 : best;
+}
+
+function quantile(values: number[], share: number): number {
+  const sorted = values.filter(value => value > 0).sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * share))] : 0;
+}
+
+function sampleCells(cells: readonly number[]): number[] {
+  const step = Math.max(1, Math.floor(cells.length / WIDTH_SAMPLES));
+  return cells.filter((_, index) => index % step === 0);
+}
+
+function cellCentre(snapshot: Snapshot, cell: number, gridWidth: number, gridHeight: number): { x: number; y: number; reach: number } {
+  const { width, height } = snapshot.working;
+  const cellSize = Math.max(width / gridWidth, height / gridHeight);
+  return {
+    x: Math.floor(((cell % gridWidth) + 0.5) * width / gridWidth),
+    y: Math.floor((((cell / gridWidth) | 0) + 0.5) * height / gridHeight),
+    reach: Math.ceil(cellSize * 2) + 2,
+  };
+}
+
+/** Typical pen width of a drawing: the shorter of the two axis-aligned runs through its ink. */
+function strokeWidthOf(snapshot: Snapshot, cells: readonly number[], gridWidth: number, gridHeight: number): number {
+  // Upper quartile: thin stitch lines and details inside a drawing should not pull it down.
+  return quantile(sampleCells(cells).map(cell => {
+    const { x, y, reach } = cellCentre(snapshot, cell, gridWidth, gridHeight);
+    const across = [inkRun(snapshot, x, y, true, reach), inkRun(snapshot, x, y, false, reach)].filter(Boolean);
+    return across.length ? Math.min(...across) : 0;
+  }), 0.75);
+}
+
+/** Typical thickness of a straight rule, measured across it. */
+function ruleWidthOf(snapshot: Snapshot, line: RuledLine, gridWidth: number, gridHeight: number): number {
+  return quantile(sampleCells(line.cells).map(cell => {
+    const { x, y, reach } = cellCentre(snapshot, cell, gridWidth, gridHeight);
+    return inkRun(snapshot, x, y, line.horizontal, reach);
+  }), 0.5);
+}
+
 function isBlueInk(data: Uint8ClampedArray, offset: number): boolean {
   const red = data[offset];
   const green = data[offset + 1];
@@ -192,13 +261,31 @@ function isBlueInk(data: Uint8ClampedArray, offset: number): boolean {
 function figureCandidates(snapshot: Snapshot, anchors: readonly { bounds: Bounds }[], gridWidth: number, gridHeight: number, textMask?: Uint8Array): Uint8Array | null {
   const { width, height, data } = snapshot.working;
   let result: Uint8Array | null = null;
-  for (const { bounds } of anchors) {
+  // Full-size areas around each figure; overlapping areas are merged so no figure line is cut
+  // at the edge of an area (a cut line looks short and would read as a note).
+  let areas = anchors.map(({ bounds }) => {
     const marginX = Math.max(2, Math.round((bounds.right - bounds.left + 1) * 0.12));
     const marginY = Math.max(1, Math.round((bounds.bottom - bounds.top + 1) * 0.025));
-    const left = Math.max(0, Math.floor((bounds.left - marginX) * width / gridWidth));
-    const right = Math.min(width, Math.ceil((bounds.right + marginX + 1) * width / gridWidth));
-    const top = Math.max(0, Math.floor((bounds.top - marginY) * height / gridHeight));
-    const bottom = Math.min(height, Math.ceil((bounds.bottom + marginY + 1) * height / gridHeight));
+    return {
+      left: Math.max(0, Math.floor((bounds.left - marginX) * width / gridWidth)),
+      right: Math.min(width, Math.ceil((bounds.right + marginX + 1) * width / gridWidth)),
+      top: Math.max(0, Math.floor((bounds.top - marginY) * height / gridHeight)),
+      bottom: Math.min(height, Math.ceil((bounds.bottom + marginY + 1) * height / gridHeight)),
+    };
+  });
+  for (let merged = true; merged;) {
+    merged = false;
+    for (let i = 0; i < areas.length && !merged; i += 1) {
+      for (let j = i + 1; j < areas.length && !merged; j += 1) {
+        const [a, b] = [areas[i], areas[j]];
+        if (a.left >= b.right || b.left >= a.right || a.top >= b.bottom || b.top >= a.bottom) continue;
+        const union = { left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom) };
+        areas = [...areas.filter((_, index) => index !== i && index !== j), union];
+        merged = true;
+      }
+    }
+  }
+  for (const { left, right, top, bottom } of areas) {
     const scale = Math.max(1, Math.ceil(Math.sqrt((right - left) * (bottom - top) / MAX_FIGURE_ANALYSIS_PIXELS)));
     const cropWidth = Math.ceil((right - left) / scale);
     const cropHeight = Math.ceil((bottom - top) / scale);
@@ -389,9 +476,9 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     return broadRows >= 2 && tallColumns >= 2;
   })();
 
-  // A drawing touching the printed form frame joins it into one giant component. Take the
-  // ruled lines out and give each remaining part its own label so drawings can be found.
-  const splitParts = new Set<number>();
+  // A drawing touching the printed form frame joins it into one giant component. Printed rules
+  // are thinner than pen lines: take out the long straight lines that are thinner than the
+  // drawing found next to them and give each remaining part its own label.
   const originalCount = components.length;
   for (let index = 0; index < originalCount; index += 1) {
     const bounds = components[index];
@@ -399,22 +486,22 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
       && bounds.right - bounds.left + 1 >= gridWidth * 0.5
       && bounds.bottom - bounds.top + 1 >= gridHeight * 0.5;
     if (!giantGrid) continue;
+    const { cells, lines } = findRuledLines(labels, index + 1, bounds, gridWidth, gridHeight);
+    if (!lines.length) continue;
+    const trial = splitRuledComponent(labels, index + 1, cells, lines, gridWidth, gridHeight);
+    const drawing = trial.parts
+      .filter(part => componentIsGarment(boundsOf(part, gridWidth), gridWidth, gridHeight, gridPixels))
+      .sort((a, b) => b.length - a.length)[0];
+    if (!drawing) continue;
+    const penWidth = strokeWidthOf(snapshot, drawing, gridWidth, gridHeight);
+    const printed = lines.filter(line => ruleWidthOf(snapshot, line, gridWidth, gridHeight) < penWidth * PRINTED_RULE_SHARE);
+    if (!printed.length) continue;
     let movedCells = 0;
-    for (const part of splitRuledComponent(labels, index + 1, bounds, gridWidth, gridHeight).parts) {
-      movedCells += part.length;
+    for (const part of splitRuledComponent(labels, index + 1, cells, printed, gridWidth, gridHeight).parts) {
       const id = components.length + 1;
-      const partBounds: Bounds = { left: gridWidth, top: gridHeight, right: 0, bottom: 0, count: part.length };
-      for (const cell of part) {
-        const x = cell % gridWidth;
-        const y = (cell / gridWidth) | 0;
-        labels[cell] = id;
-        partBounds.left = Math.min(partBounds.left, x);
-        partBounds.right = Math.max(partBounds.right, x);
-        partBounds.top = Math.min(partBounds.top, y);
-        partBounds.bottom = Math.max(partBounds.bottom, y);
-      }
-      components.push(partBounds);
-      splitParts.add(id);
+      for (const cell of part) labels[cell] = id;
+      components.push(boundsOf(part, gridWidth));
+      movedCells += part.length;
     }
     components[index] = { ...bounds, count: bounds.count - movedCells };
   }
@@ -440,9 +527,6 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     if (componentIsGarment(bounds, gridWidth, gridHeight, gridPixels)) {
       anchors.push({ id, bounds });
       largestAnchor = Math.max(largestAnchor, bounds.count);
-    } else if (splitParts.has(id)) {
-      // Leftovers of the form table (cell text, short rules) stay deletable like the table.
-      gridFlags[id] = 1;
     }
   }
 
