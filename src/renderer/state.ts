@@ -13,12 +13,13 @@ export type CandidateReadiness =
 export function candidateReadiness(input: {
   projectId: string;
   baseVersion: string;
+  workVersion?: number;
   request: RequestInfo | null;
   candidate: Candidate | null;
   aligned: boolean;
   acknowledged: boolean;
 }): CandidateReadiness {
-  const { projectId, baseVersion, workVersion, request, candidate } = input;
+  const { projectId, baseVersion, request, candidate } = input;
   if (!request) return 'missing-request';
   if (!candidate) return 'missing-candidate';
   if (request.projectId !== projectId) return 'wrong-project';

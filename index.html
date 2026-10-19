@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' blob:; style-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'none';" />
+    <title>Sketch Cleaner · 의류 도해 정리</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Sketch Cleaner 작업대로 이동">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 28 28" fill="none">
+              <path d="M5 4.5h13l5 5V23H5z" stroke="currentColor" stroke-width="1.5" />
+              <path d="M18 4.5V10h5M9 14h10M9 18h7" stroke="currentColor" stroke-width="1.5" />
+              <circle cx="8.5" cy="8.5" r="1" fill="currentColor" />
+            </svg>
+          </span>
+          <span class="brand-copy"><strong>Sketch Cleaner</strong><small>의류 도해 정리</small></span>
+        </a>
+        <div class="project-heading" aria-live="polite">
+          <span id="projectName">새 작업</span>
+          <span id="saveState" class="save-state"><i></i><span>사진을 열어 시작하세요</span></span>
+          <span id="recoveryBadge" class="recovery-badge" hidden title="마지막 정상 작업을 열었습니다. 일부 파일을 확인해 주세요.">복구 확인 필요</span>
+        </div>
+        <div class="top-actions">
+          <button id="undoButton" class="icon-button" type="button" aria-label="실행 취소" title="실행 취소 · Z">↶</button>
+          <button id="redoButton" class="icon-button" type="button" aria-label="다시 실행" title="다시 실행 · Shift+Z">↷</button>
+          <span class="action-divider" aria-hidden="true"></span>
+          <button id="saveProjectButton" class="button button-quiet" type="button">프로젝트 저장</button>
+          <button id="openButton" class="button button-primary" type="button"><span aria-hidden="true">＋</span> 사진 열기</button>
+          <button id="moreMenuButton" class="icon-button" type="button" aria-label="프로젝트 메뉴" title="프로젝트 메뉴">···</button>
+        </div>
+        <div id="projectMenu" class="project-menu" hidden>
+          <button id="openProjectButton" type="button">프로젝트 열기</button>
+          <button id="saveAsButton" type="button">다른 폴더에 저장</button>
+          <button id="openProjectFolderButton" type="button">프로젝트 폴더 열기</button>
+        </div>
+      </header>
+
+      <main class="workbench">
+        <aside class="tool-rail" aria-label="편집 도구">
+          <section class="rail-section">
+            <div class="section-heading"><h2>작업 영역</h2><span class="section-mark">A</span></div>
+            <button class="rail-button active" type="button" data-tool="delete" aria-pressed="true">
+              <span class="tool-icon delete-icon" aria-hidden="true">−</span><span>삭제 표시</span>
+            </button>
+            <button class="rail-button" type="button" data-tool="protect" aria-pressed="false">
+              <span class="tool-icon protect-icon" aria-hidden="true">＋</span><span>보호 표시</span>
+            </button>
+            <button class="rail-button" type="button" data-tool="unselect" aria-pressed="false">
+              <span class="tool-icon erase-icon" aria-hidden="true">⌫</span><span>표시 지우기</span>
+            </button>
+            <button class="rail-button" type="button" data-tool="restore" aria-pressed="false">
+              <span class="tool-icon restore-icon" aria-hidden="true">↺</span><span>기준 복원</span>
+            </button>
+            <button class="rail-button" type="button" data-tool="lasso" aria-pressed="false">
+              <span class="tool-icon lasso-icon" aria-hidden="true">⌁</span><span>올가미 선택</span>
+            </button>
+            <button class="rail-button" type="button" data-tool="pan" aria-pressed="false">
+              <span class="tool-icon pan-icon" aria-hidden="true">✥</span><span>화면 이동</span>
+            </button>
+            <p id="toolHint" class="tool-hint">지울 곳을 드래그해 표시하세요.</p>
+          </section>
+
+          <section id="brushControls" class="rail-section control-section">
+            <div class="section-heading"><h2>브러시</h2><span id="brushSizeValue" class="value-chip">32 px</span></div>
+            <label class="range-control" for="brushSize"><span>크기</span><input id="brushSize" type="range" min="2" max="220" value="32" /><span id="brushSizeOutput" class="range-value">32</span></label>
+            <label class="range-control" for="brushStrength"><span>강도</span><input id="brushStrength" type="range" min="1" max="100" value="100" /><span id="brushStrengthOutput" class="range-value">100%</span></label>
+            <label class="range-control" for="brushSoftness"><span>경계 부드러움</span><input id="brushSoftness" type="range" min="0" max="100" value="25" /><span id="brushSoftnessOutput" class="range-value">25%</span></label>
+            <p class="legend"><span class="legend-item"><i class="swatch swatch-delete"></i>삭제 범위</span><span class="legend-item"><i class="swatch swatch-protect"></i>보호 범위</span></p>
+          </section>
+
+          <section id="lassoControls" class="rail-section control-section" hidden>
+            <div class="section-heading"><h2>올가미 범위</h2></div>
+            <div class="segmented" role="group" aria-label="올가미 선택 범위">
+              <button type="button" data-lasso="inside" aria-pressed="true">안쪽 선택</button>
+              <button type="button" data-lasso="outside" aria-pressed="false">바깥 선택</button>
+            </div>
+            <p class="muted-copy">선택한 범위에 로컬 편집을 적용할 수 있습니다.</p>
+          </section>
+
+          <section class="rail-section basis-section">
+            <div class="section-heading"><h2>작업 기준</h2></div>
+            <div class="basis-actions">
+              <button id="cropButton" class="small-button" type="button">사각형 자르기</button>
+              <button id="applyCropButton" class="small-button small-button-accent" type="button" disabled>자르기 적용</button>
+            </div>
+            <div class="basis-actions basis-rotate">
+              <button id="rotateLeftButton" class="small-button" type="button" aria-label="90도 왼쪽 회전">↶ 90°</button>
+              <button id="rotateRightButton" class="small-button" type="button" aria-label="90도 오른쪽 회전">↷ 90°</button>
+            </div>
+            <label class="range-control" for="fineRotation"><span>미세 기울기</span><input id="fineRotation" type="range" min="-15" max="15" step="0.5" value="0" /><span id="fineRotationOutput" class="range-value">0°</span></label>
+            <button id="applyFineRotationButton" class="text-button" type="button" disabled>기울기 적용</button>
+          </section>
+
+          <section class="rail-section keyboard-note">
+            <span class="note-label">빠른 조작</span>
+            <p><kbd>O</kbd> 열기 <kbd>S</kbd> 저장</p>
+            <p><kbd>Z</kbd> 취소 <kbd>⇧ Z</kbd> 다시</p>
+            <p><kbd>+</kbd><kbd>−</kbd> 확대·축소</p>
+          </section>
+        </aside>
+
+        <section class="canvas-column" aria-label="작업 이미지">
+          <div class="canvas-toolbar">
+            <div class="canvas-title"><span class="image-dot"></span><span id="canvasTitle">사진을 열어 시작하세요</span><span id="imageDimensions" class="image-dimensions"></span></div>
+            <div class="view-actions" aria-label="화면 확대 조절">
+              <button id="zoomOutButton" class="zoom-button" type="button" aria-label="축소">−</button>
+              <button id="zoomReadout" class="zoom-readout" type="button" aria-label="화면 맞춤">맞춤</button>
+              <button id="zoomInButton" class="zoom-button" type="button" aria-label="확대">＋</button>
+              <span class="toolbar-divider"></span>
+              <button id="zoom100Button" class="small-button" type="button">100%</button>
+              <button id="maskToggleButton" class="toggle-button" type="button" aria-pressed="true">범위 표시</button>
+            </div>
+          </div>
+          <div id="stage" class="stage" tabindex="0" aria-label="이미지 작업 캔버스. 마우스 휠로 확대하거나 스페이스바를 누른 채 이동할 수 있습니다.">
+            <canvas id="sceneCanvas" aria-hidden="true"></canvas>
+            <canvas id="overlayCanvas" aria-hidden="true"></canvas>
+            <div id="compareLabels" class="compare-labels" hidden aria-hidden="true"></div>
+            <div id="emptyState" class="empty-state">
+              <div class="empty-card">
+                <div class="empty-art" aria-hidden="true">
+                  <svg viewBox="0 0 180 148" fill="none">
+                    <path d="M42 18h65l29 29v81H42z" fill="#fff" stroke="#9aa9ad" stroke-width="1.5" />
+                    <path d="M107 18v30h29M57 65h61M57 79h46M57 93h36" stroke="#b2bcb9" stroke-width="1.5" />
+                    <path d="M55 111c12-12 17 10 27-1 9-9 15 5 24-2" stroke="#35556a" stroke-width="2" stroke-linecap="round" />
+                    <path d="M32 124h114" stroke="#d2d9d5" stroke-dasharray="3 4" />
+                    <circle cx="128" cy="103" r="20" fill="#edf2f1" stroke="#35556a" stroke-width="1.5" />
+                    <path d="M128 94v18M119 103h18" stroke="#35556a" stroke-width="1.8" stroke-linecap="round" />
+                  </svg>
+                </div>
+                <p class="eyebrow">의류 도해 작업대</p>
+                <h1>정리할 작업 사진을 여세요</h1>
+                <p class="empty-description">도해 선은 보호하고, 지울 곳은 직접 표시해 정리합니다.</p>
+                <button id="emptyOpenButton" class="button button-primary" type="button">사진 불러오기</button>
+                <p class="drop-hint">JPEG 또는 PNG를 이곳에 끌어다 놓으세요</p>
+              </div>
+              <div class="recent-card">
+                <div class="recent-heading"><h2>최근 작업</h2><button id="refreshRecentButton" class="text-button" type="button">새로 고침</button></div>
+                <div id="recentProjects" class="recent-list"><p class="muted-copy">저장한 작업이 여기에 표시됩니다.</p></div>
+              </div>
+            </div>
+            <div id="dropOverlay" class="drop-overlay" hidden><strong>사진을 놓아 작업을 시작하세요</strong><span>JPEG · PNG</span></div>
+            <div id="processingOverlay" class="processing-overlay" hidden>
+              <div class="processing-card"><span class="spinner" aria-hidden="true"></span><strong id="processingLabel">이미지를 처리하고 있습니다</strong><progress id="progressBar" class="progress-track" max="100" value="0" aria-label="이미지 처리 진행률"></progress><span id="progressText" class="muted-copy">준비 중</span><button id="cancelJobButton" class="text-button" type="button">처리 취소</button></div>
+            </div>
+          </div>
+          <div class="canvas-footer">
+            <p id="canvasHint">브러시로 지울 곳과 남길 곳을 표시하세요.</p>
+            <div class="canvas-footer-right"><span id="selectionSummary">삭제 범위 0 · 보호 범위 0</span><span class="coord-mark" aria-hidden="true">x / y</span></div>
+          </div>
+          <div id="errorBanner" class="error-banner" role="alert" hidden><span id="errorText"></span><button id="retrySaveButton" class="text-button" type="button" hidden>저장 다시 시도</button><button id="dismissErrorButton" class="icon-button" type="button" aria-label="오류 닫기">×</button></div>
+        </section>
+
+        <aside class="inspector" aria-label="작업 단계">
+          <nav class="inspector-tabs" role="tablist" aria-label="편집, 요청, 검수, 저장">
+            <button id="tabEdit" class="inspector-tab active" type="button" role="tab" aria-selected="true" data-panel="edit">편집</button>
+            <button id="tabRequest" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="request">요청</button>
+            <button id="tabReview" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="review">검수</button>
+            <button id="tabExport" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="export">저장</button>
+          </nav>
+          <div id="inspectorContent" class="inspector-content"></div>
+        </aside>
+      </main>
+
+      <div id="liveMessage" class="sr-only" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/renderer/main.ts"></script>
+  </body>
+</html>

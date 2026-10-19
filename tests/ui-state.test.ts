@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { candidateReadiness, fitCandidateTransform } from '../src/renderer/state.ts';
+import { candidateReadiness, fitCandidateTransform } from '../src/renderer/state';
 
 const request = {
   id: 'request-1',
