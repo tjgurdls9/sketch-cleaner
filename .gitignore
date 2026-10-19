@@ -1,0 +1,14 @@
+node_modules/
+.vite/
+dist/
+out/
+coverage/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.env*
+!.env.example
+projects/
+artifacts/
+*.sketchcleaner
