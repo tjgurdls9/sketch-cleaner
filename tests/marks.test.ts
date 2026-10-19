@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findAnnotationInk } from '../src/core/marks';
-import { splitRuledComponent } from '../src/core/ruled';
+import { findRuledLines, splitRuledComponent } from '../src/core/ruled';
 import { autoCleanDraft } from '../src/core/automatic';
 import { createSnapshot } from '../src/core/engine';
 import type { Pixels } from '../src/shared/types';
@@ -105,6 +105,16 @@ describe('note candidates inside a figure', () => {
     expect(selected(mask, target, 15, 80, 1)).toBe(false);
   });
 
+  it('does not take a drawing line for a leader because a coloured note line touches its end', () => {
+    const target = canvas(200, 240);
+    stroke(target, 100, 10, 100, 200);
+    stroke(target, 20, 202, 180, 205, { colored: true });
+    stroke(target, 30, 60, 60, 60); writing(target, 26, 52, 66, 68);
+    const mask = run(target);
+    expect(selected(mask, target, 100, 100)).toBe(false);
+    expect(selected(mask, target, 140, 204)).toBe(true);
+  });
+
   it('returns an empty mask for blank paper', () => {
     const target = canvas(40, 40);
     expect(run(target).some(Boolean)).toBe(false);
@@ -121,7 +131,8 @@ describe('form table split', () => {
     // A drawn sleeve touching the frame: two slanted strokes and a cuff.
     for (let y = 40; y < 100; y += 1) { labels[y * width + 6 + Math.round((y - 40) / 3)] = 1; labels[y * width + 30 + Math.round((y - 40) / 2)] = 1; }
     for (let x = 26; x <= 60; x += 1) labels[99 * width + x] = 1;
-    const split = splitRuledComponent(labels, 1, { left: 0, top: 0, right: width - 1, bottom: height - 1 }, width, height);
+    const { cells, lines } = findRuledLines(labels, 1, { left: 0, top: 0, right: width - 1, bottom: height - 1 }, width, height);
+    const split = splitRuledComponent(labels, 1, cells, lines, width, height);
     const ruled = new Set(split.ruled);
     expect(ruled.has(10 * width + 150)).toBe(true);
     expect(ruled.has(200 * width + 5)).toBe(true);
@@ -164,6 +175,24 @@ describe('automatic cleanup with note candidates', () => {
     expect([...result.working.data.slice(at(248, 180) * 4, at(248, 180) * 4 + 4)]).toEqual([230, 20, 20, 255]);
     expect(result.deleteMask[at(211, 200)]).toBe(0);
     expect(result.deleteMask[at(125, 200)]).toBe(0);
+  });
+
+  it('keeps a thick straight-lined drawing sitting in a thinly ruled form', () => {
+    const pixels = sheet((data, width) => {
+      const ink = [30, 30, 30, 255];
+      for (let y = 20; y < 380; y += 60) paint(data, width, 20, y, 380, y, ink, 1);
+      for (let x = 20; x < 400; x += 120) paint(data, width, x, 20, x, 380, ink, 1);
+      // Trousers drawn with a ruler: long straight thick sides, waistband and hems.
+      paint(data, width, 150, 50, 250, 50, ink, 6); paint(data, width, 150, 50, 150, 340, ink, 6); paint(data, width, 250, 50, 250, 340, ink, 6);
+      paint(data, width, 150, 340, 190, 340, ink, 6); paint(data, width, 210, 340, 250, 340, ink, 6);
+      paint(data, width, 190, 120, 190, 340, ink, 6); paint(data, width, 210, 120, 210, 340, ink, 6); paint(data, width, 190, 120, 210, 120, ink, 6);
+      paint(data, width, 160, 80, 180, 100, ink, 3); paint(data, width, 240, 80, 220, 100, ink, 3);
+    });
+    const result = autoCleanDraft(createSnapshot(pixels, 'base'));
+    for (const [x, y] of [[150, 200], [250, 200], [190, 250], [200, 50]]) {
+      const offset = (y * 400 + x) * 4;
+      expect([...result.working.data.slice(offset, offset + 4)], `${x},${y}`).toEqual([30, 30, 30, 255]);
+    }
   });
 
   it('keeps a garment that touches the printed form frame', () => {
