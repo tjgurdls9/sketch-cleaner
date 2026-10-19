@@ -22,7 +22,7 @@ const BRUSH_SIZE_MIN = 2;
 const BRUSH_SIZE_MAX = 220;
 type Panel = 'edit' | 'request' | 'review' | 'export';
 type CompareMode = 'side' | 'overlay';
-type AutoCleanStatus = 'idle' | 'running' | 'complete' | 'unchanged' | 'cancelled' | 'failed';
+type AutoCleanStatus = 'idle' | 'running' | 'complete' | 'review' | 'unchanged' | 'cancelled' | 'failed';
 
 interface AppState {
   project: Project | null;
@@ -1066,11 +1066,14 @@ async function runAutomaticCleanup(): Promise<void> {
       announce('자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.');
       return;
     }
-    state.showMasks = false;
+    const review = hasPendingSelection(next);
+    state.showMasks = review;
     syncMaskToggle();
-    state.autoCleanStatus = 'complete';
+    state.autoCleanStatus = review ? 'review' : 'complete';
     if (!commitWorkerSnapshot(next, token)) return;
-    announce('자동 정리가 끝났습니다. 결과를 확인하고 필요한 곳을 직접 수정하세요.');
+    announce(review
+      ? '자동 정리가 끝났습니다. 도해 안의 지울 후보를 빨간색으로 골라 두었습니다. 확인한 뒤 Delete로 지우세요.'
+      : '자동 정리가 끝났습니다. 결과를 확인하고 필요한 곳을 직접 수정하세요.');
   } catch (error) {
     if (!isEditTokenCurrent(token)) {
       clearProcessing();
@@ -1091,6 +1094,16 @@ async function runAutomaticCleanup(): Promise<void> {
       showError(safeTextError(error, '자동 정리를 마치지 못했습니다. 사진은 유지되어 직접 수정할 수 있습니다.'));
     }
   }
+}
+
+/** True when some selected pixels still hold ink: candidates waiting for the person to confirm. */
+function hasPendingSelection(snapshot: Snapshot): boolean {
+  const { data } = snapshot.working;
+  for (let index = 0; index < snapshot.deleteMask.length; index += 1) {
+    if (snapshot.deleteMask[index] !== 255) continue;
+    if (Math.min(data[index * 4], data[index * 4 + 1], data[index * 4 + 2]) < 200) return true;
+  }
+  return false;
 }
 
 function detectTextMask(snapshot: Snapshot, requestId: string): Promise<Uint8Array> {
@@ -1344,6 +1357,7 @@ function autoCleanDescription(): string {
     idle: { title: '원본 미리보기입니다', detail: '자동 정리는 글씨 범위를 참고해 주변의 분리된 표시를 정리합니다. 선과 겹쳐 판단하기 어려운 곳은 직접 수정하세요.' },
     running: { title: '자동 정리 중입니다', detail: '먼저 로컬 모델이 글씨 범위를 살펴본 뒤 정리합니다. 취소해도 사진은 유지됩니다.' },
     complete: { title: '자동 정리를 적용했습니다', detail: '결과 선을 살펴보고 필요한 곳은 직접 수정하세요.' },
+    review: { title: '도해 안의 지울 후보를 빨간색으로 골라 두었습니다', detail: '글씨·화살표·가위표·색 표시 후보입니다. 디자인인 곳은 표시 지우기로 빼고 Delete로 지우세요.' },
     unchanged: { title: '', detail: '자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.' },
     cancelled: { title: '자동 정리를 취소했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
     failed: { title: '자동 정리를 마치지 못했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },

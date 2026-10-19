@@ -1,6 +1,10 @@
 import type { Snapshot } from '../shared/types';
+import { findAnnotationInk } from './marks';
+import { splitRuledComponent } from './ruled';
 
 export const MAX_AUTO_ANALYSIS_PIXELS = 1_000_000;
+/** Figure crops larger than this are analysed at a reduced scale for note candidates. */
+export const MAX_FIGURE_ANALYSIS_PIXELS = 6_000_000;
 
 type Progress = (completed: number, total: number) => void;
 interface Bounds { left: number; top: number; right: number; bottom: number; count: number }
@@ -173,6 +177,84 @@ function labelComponentFlags(components: readonly Bounds[], gridPixels: number, 
   return flags;
 }
 
+function isBlueInk(data: Uint8ClampedArray, offset: number): boolean {
+  const red = data[offset];
+  const green = data[offset + 1];
+  const blue = data[offset + 2];
+  return blue >= 90 && blue - red >= 40 && blue - green >= 20 && Math.max(red, green, blue) <= 235;
+}
+
+/**
+ * Notes drawn over the kept figures (writing, leaders, scissor marks, red marks, coloured solid
+ * lines) as a full-size 0/255 mask. These are selection candidates only: the figure may hold
+ * real design details of the same shape, so the person confirms them before anything is erased.
+ */
+function figureCandidates(snapshot: Snapshot, anchors: readonly { bounds: Bounds }[], gridWidth: number, gridHeight: number, textMask?: Uint8Array): Uint8Array | null {
+  const { width, height, data } = snapshot.working;
+  let result: Uint8Array | null = null;
+  for (const { bounds } of anchors) {
+    const marginX = Math.max(2, Math.round((bounds.right - bounds.left + 1) * 0.12));
+    const marginY = Math.max(1, Math.round((bounds.bottom - bounds.top + 1) * 0.025));
+    const left = Math.max(0, Math.floor((bounds.left - marginX) * width / gridWidth));
+    const right = Math.min(width, Math.ceil((bounds.right + marginX + 1) * width / gridWidth));
+    const top = Math.max(0, Math.floor((bounds.top - marginY) * height / gridHeight));
+    const bottom = Math.min(height, Math.ceil((bounds.bottom + marginY + 1) * height / gridHeight));
+    const scale = Math.max(1, Math.ceil(Math.sqrt((right - left) * (bottom - top) / MAX_FIGURE_ANALYSIS_PIXELS)));
+    const cropWidth = Math.ceil((right - left) / scale);
+    const cropHeight = Math.ceil((bottom - top) / scale);
+    const ink = new Uint8Array(cropWidth * cropHeight);
+    const colored = new Uint8Array(cropWidth * cropHeight);
+    const text = textMask ? new Uint8Array(cropWidth * cropHeight) : undefined;
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const index = y * width + x;
+        const cell = ((y - top) / scale | 0) * cropWidth + ((x - left) / scale | 0);
+        const blue = isBlueInk(data, index * 4);
+        if (blue || pixelKind(data, index * 4) === 'ink') ink[cell] = 1;
+        if (blue) colored[cell] = 1;
+        if (text && textMask?.[index] === 255) text[cell] = 255;
+      }
+    }
+    const notes = findAnnotationInk({ ink, colored, text }, cropWidth, cropHeight);
+    const mask: Uint8Array = result ?? new Uint8Array(width * height);
+    result = mask;
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const index = y * width + x;
+        const kind = pixelKind(data, index * 4);
+        const cell = ((y - top) / scale | 0) * cropWidth + ((x - left) / scale | 0);
+        if (kind === 'red' || (notes[cell] && (kind === 'ink' || isBlueInk(data, index * 4) || isAntialiasedInk(data, index * 4)))) mask[index] = 255;
+      }
+    }
+    // Take in the soft edge of each note so filling it leaves no grey or pink halo.
+    const edge: number[] = [];
+    for (let y = Math.max(1, top); y < Math.min(height - 1, bottom); y += 1) {
+      for (let x = Math.max(1, left); x < Math.min(width - 1, right); x += 1) {
+        const index = y * width + x;
+        if (mask[index] || pixelKind(data, index * 4) === 'ink') continue;
+        if (Math.min(data[index * 4], data[index * 4 + 1], data[index * 4 + 2]) >= 230) continue;
+        if (mask[index - 1] || mask[index + 1] || mask[index - width] || mask[index + width]) edge.push(index);
+      }
+    }
+    for (const index of edge) mask[index] = 255;
+  }
+  return result;
+}
+
+/** Adds note candidates to the delete selection without touching the pixels. */
+function selectCandidates(source: Snapshot, next: Snapshot, candidates: Uint8Array | null): Snapshot {
+  if (!candidates) return next;
+  let deleteMask = next.deleteMask;
+  let copied = false;
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (!candidates[index] || deleteMask[index] === 255 || next.protectMask[index] === 255) continue;
+    if (!copied) { deleteMask = next.deleteMask.slice(); copied = true; }
+    deleteMask[index] = 255;
+  }
+  if (!copied) return next;
+  return { ...next, deleteMask, workVersion: next === source ? source.workVersion + 1 : next.workVersion };
+}
+
 function cleanWithTextMask(
   snapshot: Snapshot,
   textMask: Uint8Array,
@@ -290,10 +372,6 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
   }
 
   const { labels, components } = labelInk(ink, gridWidth, gridHeight, progress, gridHeight, total);
-  const anchors: { id: number; bounds: Bounds }[] = [];
-  const gridFlags = new Uint8Array(components.length + 1);
-  const componentSmall = new Uint8Array(components.length + 1);
-  let largestAnchor = 0;
   const hasGlobalGrid = (() => {
     let broadRows = 0;
     let tallColumns = 0;
@@ -311,12 +389,47 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     return broadRows >= 2 && tallColumns >= 2;
   })();
 
+  // A drawing touching the printed form frame joins it into one giant component. Take the
+  // ruled lines out and give each remaining part its own label so drawings can be found.
+  const splitParts = new Set<number>();
+  const originalCount = components.length;
+  for (let index = 0; index < originalCount; index += 1) {
+    const bounds = components[index];
+    const giantGrid = hasGlobalGrid
+      && bounds.right - bounds.left + 1 >= gridWidth * 0.5
+      && bounds.bottom - bounds.top + 1 >= gridHeight * 0.5;
+    if (!giantGrid) continue;
+    let movedCells = 0;
+    for (const part of splitRuledComponent(labels, index + 1, bounds, gridWidth, gridHeight).parts) {
+      movedCells += part.length;
+      const id = components.length + 1;
+      const partBounds: Bounds = { left: gridWidth, top: gridHeight, right: 0, bottom: 0, count: part.length };
+      for (const cell of part) {
+        const x = cell % gridWidth;
+        const y = (cell / gridWidth) | 0;
+        labels[cell] = id;
+        partBounds.left = Math.min(partBounds.left, x);
+        partBounds.right = Math.max(partBounds.right, x);
+        partBounds.top = Math.min(partBounds.top, y);
+        partBounds.bottom = Math.max(partBounds.bottom, y);
+      }
+      components.push(partBounds);
+      splitParts.add(id);
+    }
+    components[index] = { ...bounds, count: bounds.count - movedCells };
+  }
+
+  const anchors: { id: number; bounds: Bounds }[] = [];
+  const gridFlags = new Uint8Array(components.length + 1);
+  const componentSmall = new Uint8Array(components.length + 1);
+  let largestAnchor = 0;
+
   for (let index = 0; index < components.length; index += 1) {
     const bounds = components[index];
     const id = index + 1;
     const componentWidth = bounds.right - bounds.left + 1;
     const componentHeight = bounds.bottom - bounds.top + 1;
-    const giantGrid = hasGlobalGrid
+    const giantGrid = index < originalCount && hasGlobalGrid
       && componentWidth >= gridWidth * 0.5
       && componentHeight >= gridHeight * 0.5;
     const isGrid = giantGrid || componentIsGrid(id, labels, gridWidth, bounds);
@@ -327,6 +440,9 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     if (componentIsGarment(bounds, gridWidth, gridHeight, gridPixels)) {
       anchors.push({ id, bounds });
       largestAnchor = Math.max(largestAnchor, bounds.count);
+    } else if (splitParts.has(id)) {
+      // Leftovers of the form table (cell text, short rules) stay deletable like the table.
+      gridFlags[id] = 1;
     }
   }
 
@@ -338,12 +454,13 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
   anchors.sort((a, b) => b.bounds.count - a.bounds.count);
   const selectedAnchors = anchors.filter((anchor, index) => index < 4 && anchor.bounds.count >= Math.max(20, largestAnchor * 0.12));
   const keep = makeKeepRegions(labels, gridWidth, gridHeight, selectedAnchors);
+  const candidates = figureCandidates(snapshot, selectedAnchors, gridWidth, gridHeight, textMask);
   if (textMask && red) {
     const redRegions = labelInk(red, gridWidth, gridHeight);
     const shadowRegions = labelInk(shadow, gridWidth, gridHeight);
     const redFlags = labelComponentFlags(redRegions.components, gridPixels, 2, 0.02);
     const shadowFlags = labelComponentFlags(shadowRegions.components, gridPixels, Math.max(5, Math.floor(gridPixels * 0.00002)), 0.2);
-    return cleanWithTextMask(
+    return selectCandidates(snapshot, cleanWithTextMask(
       snapshot,
       textMask,
       keep,
@@ -358,7 +475,7 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
       progress,
       gridHeight * 2,
       total,
-    );
+    ), candidates);
   }
   const anchorIds = new Uint8Array(components.length + 1);
   for (const anchor of selectedAnchors) anchorIds[anchor.id] = 1;
@@ -437,12 +554,12 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
 
   if (!changed) {
     progress?.(total, total);
-    return snapshot;
+    return selectCandidates(snapshot, snapshot, candidates);
   }
-  return {
+  return selectCandidates(snapshot, {
     ...snapshot,
     working: working === snapshot.working.data ? snapshot.working : { ...snapshot.working, data: working },
     deleteMask,
     workVersion: snapshot.workVersion + 1,
-  };
+  }, candidates);
 }
