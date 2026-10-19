@@ -35,7 +35,7 @@
     "esbuild": "^0.25.12",
     "eslint": "^9.39.1",
     "jsdom": "^30.1.3",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.46.4",
     "vite": "^6.4.1",
     "vitest": "^5.0.5"
