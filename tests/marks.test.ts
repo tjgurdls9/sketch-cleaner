@@ -84,7 +84,7 @@ describe('note candidates inside a figure', () => {
     expect(selected(mask, target, 120, 160)).toBe(false);
   });
 
-  it('selects a small detached scribble but leaves a lone straight tick', () => {
+  it('selects a small detached scribble and, erring on the side of selecting, a lone straight tick', () => {
     const target = canvas(200, 200);
     stroke(target, 20, 5, 20, 195);
     for (let angle = 0; angle < Math.PI * 2; angle += 0.05) stroke(target, 100 + 9 * Math.cos(angle), 100 + 9 * Math.sin(angle), 100 + 9 * Math.cos(angle + 0.05), 100 + 9 * Math.sin(angle + 0.05), { thickness: 3 });
@@ -92,8 +92,36 @@ describe('note candidates inside a figure', () => {
     stroke(target, 150, 150, 160, 170, { thickness: 3 });
     const mask = run(target);
     expect(selected(mask, target, 91, 100)).toBe(true);
-    expect(selected(mask, target, 155, 160)).toBe(false);
+    expect(selected(mask, target, 155, 160)).toBe(true);
     expect(selected(mask, target, 20, 100)).toBe(false);
+  });
+
+  it('selects short marks hanging off a drawing line but keeps short pieces that join two drawing lines', () => {
+    const target = canvas(240, 240);
+    stroke(target, 60, 10, 60, 230);
+    stroke(target, 180, 10, 180, 230);
+    stroke(target, 60, 120, 180, 120); // a short-ish crossbar joining both lines (a waistband end)
+    stroke(target, 60, 60, 80, 50); stroke(target, 80, 50, 90, 62); // a hook drawn on the seam
+    stroke(target, 180, 180, 198, 172, { thickness: 3 }); stroke(target, 186, 186, 200, 192, { thickness: 3 }); // a loopless symbol
+    const mask = run(target);
+    expect(selected(mask, target, 80, 52)).toBe(true);
+    expect(selected(mask, target, 194, 175)).toBe(true);
+    expect(selected(mask, target, 120, 120)).toBe(false);
+    expect(selected(mask, target, 60, 30)).toBe(false);
+    expect(selected(mask, target, 180, 30)).toBe(false);
+  });
+
+  it('selects an arrow with no note: its shaft and both arrowhead strokes', () => {
+    const target = canvas(260, 220);
+    stroke(target, 40, 10, 40, 210);
+    // A bent arrow drawn in blank paper: from the right, left, then sharply up-right to a tip.
+    stroke(target, 240, 150, 120, 150); stroke(target, 120, 150, 170, 80);
+    stroke(target, 170, 80, 152, 84, { thickness: 3 }); stroke(target, 170, 80, 166, 98, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 200, 150)).toBe(true);
+    expect(selected(mask, target, 145, 115)).toBe(true);
+    expect(selected(mask, target, 158, 84)).toBe(true);
+    expect(selected(mask, target, 40, 100)).toBe(false);
   });
 
   it('selects a coloured solid line and keeps coloured dashes', () => {
