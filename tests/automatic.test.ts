@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pixels, Snapshot } from '../src/shared/types';
 import { createSnapshot, runPixelJob } from '../src/core/engine';
+import { autoCleanDraft } from '../src/core/automatic';
 
 const WHITE: [number, number, number, number] = [255, 255, 255, 255];
 const BLACK: [number, number, number, number] = [24, 24, 24, 255];
@@ -65,7 +66,70 @@ function rgba(pixels: Pixels, x: number, y: number): number[] {
   return [...pixels.data.subarray((y * pixels.width + x) * 4, (y * pixels.width + x) * 4 + 4)];
 }
 
+function mask(width: number, height: number, points: readonly [number, number][]): Uint8Array {
+  const result = new Uint8Array(width * height);
+  for (const [x, y] of points) result[y * width + x] = 255;
+  return result;
+}
+
 describe('automatic cleanup draft', () => {
+  it('uses the supplied text mask independently of existing delete coverage and preserves unrelated dark edits', () => {
+    const imported = canvas(120, 100);
+    shirt(imported, 42);
+    put(imported, 8, 12, [24, 74, 168, 255]); // colored text pixel outside the figure
+    line(imported, 4, 82, 22, 82, BLACK); // unknown dark line that the text model did not select
+    const snapshot = createSnapshot(imported, 'base-model-mask');
+    const textIndex = 12 * 120 + 8;
+    const unknownIndex = 82 * 120 + 12;
+    snapshot.deleteMask[textIndex] = 255;
+    snapshot.deleteMask[unknownIndex] = 255;
+    snapshot.working.data.set([70, 80, 90, 255], unknownIndex * 4);
+    const textMask = mask(120, 100, [[8, 12]]);
+    const beforeUnknown = rgba(snapshot.working, 12, 82);
+
+    const result = autoCleanDraft(snapshot, undefined, textMask);
+
+    expect(result.workVersion).toBe(snapshot.workVersion + 1);
+    expect(rgba(result.working, 8, 12)).toEqual(WHITE);
+    expect(result.deleteMask[textIndex]).toBe(255);
+    expect(rgba(result.working, 12, 82)).toEqual(beforeUnknown);
+    expect(rgba(result.working, 55, 35)).toEqual(rgba(imported, 55, 35));
+    expect(snapshot.working.data[textIndex * 4]).toBe(24);
+  });
+
+  it('applies text cleanup as A times one-minus-P and restores fully protected bytes from B', () => {
+    const imported = canvas(120, 100);
+    shirt(imported, 42);
+    put(imported, 8, 12, [24, 74, 168, 255]);
+    put(imported, 9, 12, [140, 90, 40, 255]);
+    const snapshot = createSnapshot(imported, 'base-model-protection');
+    const softIndex = 12 * 120 + 8;
+    const fullIndex = 12 * 120 + 9;
+    snapshot.protectMask[softIndex] = 128;
+    snapshot.protectMask[fullIndex] = 255;
+    snapshot.working.data.set([20, 30, 40, 77], fullIndex * 4);
+    const textMask = mask(120, 100, [[8, 12], [9, 12]]);
+
+    const result = autoCleanDraft(snapshot, undefined, textMask);
+
+    const amount = 1 - 128 / 255;
+    const source = [24, 74, 168, 255];
+    const soft = rgba(result.working, 8, 12);
+    expect(soft).toEqual(source.map((channel) => Math.round(channel * (1 - amount) + 255 * amount)));
+    expect(rgba(result.working, 9, 12)).toEqual(rgba(snapshot.base, 9, 12));
+    expect(result.deleteMask[softIndex]).toBe(255);
+    expect(result.deleteMask[fullIndex]).toBe(255);
+  });
+
+  it('rejects malformed AI masks before changing the snapshot', () => {
+    const snapshot = createSnapshot(canvas(120, 100), 'base-invalid-model-mask');
+    expect(() => autoCleanDraft(snapshot, undefined, new Uint8Array(2))).toThrow(/mask/i);
+    const nonBinary = new Uint8Array(120 * 100);
+    nonBinary[5] = 1;
+    expect(() => autoCleanDraft(snapshot, undefined, nonBinary)).toThrow(/mask/i);
+    expect(snapshot.workVersion).toBe(0);
+  });
+
   it('keeps two garment figures and disconnected interior details while removing exterior text, table, red ink, and paper shadow', () => {
     const imported = garmentPage();
     const snapshot = createSnapshot(imported, 'base-auto');

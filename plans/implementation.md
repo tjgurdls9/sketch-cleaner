@@ -1,5 +1,15 @@
 # Sketch Cleaner 구현 계획
 
+## 0.3.0 로컬 AI 스프린트
+
+- S0 메인: 메인 0d6dd6c에서 새 브랜치, AGY 보관/미병합. 사용자 확정 버튼 실행 흐름과 narrow IPC/Worker 계약 고정.
+- S1 engine/Luna xhigh: 모델 출처·전처리·추론, 자동 범위 혼합, 픽셀 회귀. 소유 ai.ts/automatic.ts/모델 명세·라이선스/엔진 테스트.
+- S1 ui/Luna xhigh: 원본 미리보기→버튼→감지/적용→수정/저장, 취소·단일 undo·상태 경쟁. 소유 renderer/index/DOM 테스트.
+- S2 storage QA/Luna xhigh: 독립 글씨+도해 작업지, 배포 CJS 실제 추론, 설치 앱 AI E2E. 소유 독립 fixture/통합 테스트/E2E/handoff.
+- S3 메인: 검증된 모델 빌드 준비·배포 native 포함, 메인 스레드와 분리된 제한 실행/취소, IPC/모델 경계, 통합 검토→보완→Windows CI→Mac 테스트 앱/ZIP. 파일 소유권을 분리하고 Git 커밋·원격 쓰기는 메인만 수행.
+
+RED 기준: 미구현 manager/AI 모듈 및 이전 자동 시작 때문에 새 인수 검사가 실패. GREEN 기준: 실제 모델 양성 검출·도해 보존·배포 CJS/설치 앱과 원자적 취소/단일 이력까지 통과. 실제 업무 사진 품질은 별도 인수한다.
+
 ## 0.2.0 자동 초안 스프린트
 
 확정 여정은 사진 선택 → 자동 정리 → 사용자 직접 수정 → 확인 및 저장이다. `IMPLEMENTATION_SPEC.md` 상단 변경 기준을 따른다. 추가 요금·모델 설치·외부 호출 없이 기존 파일 형식과 복구 경계를 재사용한다.

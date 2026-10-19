@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { runPixelJob } from '../src/core/engine';
+import type { PixelJob } from '../src/core/engine';
 import type { PixelJobRequest, PixelJobResponse } from '../src/core/worker-protocol';
 import type { DesktopAPI, Pixels, Project, Reply, RequestBundle } from '../src/shared/types';
 
@@ -33,7 +34,10 @@ it('connects real renderer controls to worker edits, manual request review and P
   Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', { configurable: true, value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 320, bottom: 240, width: 320, height: 240, toJSON() {} }) });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   const workerJobs: string[] = [];
+  const pixelJobs: PixelJobRequest[] = [];
   let holdNextAutoClean = false;
+  let delayedWorker: { onmessage: ((event: MessageEvent<PixelJobResponse>) => void) | null; terminate: () => void; ended: boolean } | null = null;
+  let delayedWorkerRequest: PixelJobRequest | null = null;
   vi.stubGlobal('Worker', class {
     onmessage: ((event: { data: PixelJobResponse }) => void) | null = null;
     onerror: ((event: ErrorEvent) => void) | null = null;
@@ -41,7 +45,13 @@ it('connects real renderer controls to worker edits, manual request review and P
     postMessage(message: PixelJobRequest) {
       if (typeof message.id !== 'string') return;
       workerJobs.push(message.job.type);
-      if (message.job.type === 'auto-clean' && holdNextAutoClean) { holdNextAutoClean = false; return; }
+      pixelJobs.push(message);
+      if (message.job.type === 'auto-clean' && holdNextAutoClean) {
+        holdNextAutoClean = false;
+        delayedWorker = this;
+        delayedWorkerRequest = message;
+        return;
+      }
       setTimeout(() => {
         if (this.ended) return;
         try { this.onmessage?.({ data: { id: message.id, type: 'result', value: runPixelJob(browserClone(message.job)) } }); }
@@ -58,6 +68,12 @@ it('connects real renderer controls to worker edits, manual request review and P
     return { width, height, data };
   };
   let importedPhoto: Pixels | null = null;
+  const detectedTextMask = new Uint8Array(24 * 16);
+  let holdTextDetection = false;
+  let failTextDetection = false;
+  let releaseTextDetection: (() => void) | null = null;
+  const textDetectionCalls: Array<{ requestId: string; pixels: Pixels }> = [];
+  const textDetectionCancels: string[] = [];
   const makePhoto = (): Pixels => {
     const pixels = makePixels([190, 180, 170, 255]);
     pixels.data[pixels.data.length - 1] = 0;
@@ -111,6 +127,24 @@ it('connects real renderer controls to worker edits, manual request review and P
     exportPNG: async (_id, pixels) => { exported = browserClone(pixels); return ok({ path: 'C:\\LocalTest\\result.png', width: pixels.width, height: pixels.height }); },
     openFolder: async () => ok(undefined), openChatGPT: async () => ok(undefined), copyRequest: async () => ok(undefined),
   };
+  Object.assign(api, {
+    detectText: async (pixels: Pixels, requestId: string): Promise<Reply<Uint8Array>> => {
+      textDetectionCalls.push({ requestId, pixels: browserClone(pixels) });
+      if (holdTextDetection) {
+        holdTextDetection = false;
+        return new Promise(resolve => { releaseTextDetection = () => resolve(ok(detectedTextMask.slice())); });
+      }
+      if (failTextDetection) {
+        failTextDetection = false;
+        return { ok: false, error: '로컬 글씨 분석을 마치지 못했습니다.' };
+      }
+      return ok(detectedTextMask.slice());
+    },
+    cancelTextDetection: async (requestId: string): Promise<Reply<void>> => {
+      textDetectionCancels.push(requestId);
+      return ok(undefined);
+    },
+  });
   window.desktop = api;
   await import('../src/renderer/main');
   const click = (selector: string) => {
@@ -118,12 +152,15 @@ it('connects real renderer controls to worker edits, manual request review and P
     expect(element, selector).not.toBeNull(); expect(element?.disabled, selector).toBe(false); element!.click();
   };
   const savedColor = () => [...project!.snapshot.working.data.slice(0, 4)];
+  const savedColorAt = (index: number) => [...project!.snapshot.working.data.slice(index * 4, index * 4 + 4)];
   const waitForSaved = async (color: number[]) => { await vi.waitFor(() => expect(savedColor()).toEqual(color), { timeout: 6000 }); };
+  const waitForSavedAt = async (index: number, color: number[]) => { await vi.waitFor(() => expect(savedColorAt(index)).toEqual(color), { timeout: 6000 }); };
   click('#emptyOpenButton');
   await vi.waitFor(() => { expect(document.querySelector('#errorText')?.textContent).toBe(''); expect(document.querySelector('#imageDimensions')?.textContent).toContain('24'); });
-  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('unchanged'));
-  expect(document.querySelector('#autoCleanStatus')?.textContent?.trim()).toBe('자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.');
-  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(1);
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(0);
+  expect(textDetectionCalls).toHaveLength(0);
+  expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('idle');
+  expect(document.querySelector<HTMLButtonElement>('[data-action="auto-clean"]')?.textContent?.trim()).toBe('자동 정리');
   expect(document.querySelector('#maskToggleButton')?.getAttribute('aria-pressed')).toBe('false');
   const sceneColorAt = (x: number, y: number): number[] => {
     if (!sceneFrame) throw new Error('캔버스 프레임이 렌더링되지 않았습니다.');
@@ -131,28 +168,87 @@ it('connects real renderer controls to worker edits, manual request review and P
     return [...sceneFrame.data.subarray(offset, offset + 4)];
   };
   expect(sceneColorAt(171, 127)).toEqual([255, 255, 255, 255]);
-  const beforeCancelVersion = project!.snapshot.workVersion;
-  const beforeCancelColor = savedColor();
-  holdNextAutoClean = true;
+  const originalWorkVersion = project!.snapshot.workVersion;
+  holdTextDetection = true;
   click('[data-action="auto-clean"]');
   await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('running'));
+  const cancelledDetectionId = textDetectionCalls.at(-1)!.requestId;
+  expect(cancelledDetectionId).toMatch(/^[0-9a-f-]{36}$/i);
+  expect((document.querySelector('#progressBar') as HTMLProgressElement).hasAttribute('value')).toBe(false);
+  expect(document.querySelector('#progressText')?.textContent).not.toMatch(/%/);
+  expect(document.querySelector<HTMLButtonElement>('#tabExport')?.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('button[data-tool="delete"]')?.disabled).toBe(true);
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(0);
   click('#cancelJobButton');
   await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('cancelled'));
-  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(2);
-  expect(project!.snapshot.workVersion).toBe(beforeCancelVersion);
-  expect(savedColor()).toEqual(beforeCancelColor);
+  await vi.waitFor(() => expect(textDetectionCancels).toContain(cancelledDetectionId));
+  expect(project!.snapshot.workVersion).toBe(originalWorkVersion);
+  expect(savedColor()).toEqual([190, 180, 170, 255]);
+  expect(document.querySelector<HTMLButtonElement>('[data-action="select-all"]')?.disabled).toBe(false);
+  releaseTextDetection!();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(0);
+  expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('cancelled');
+
+  failTextDetection = true;
+  click('[data-action="auto-clean"]');
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('failed'));
+  expect(document.querySelector('#errorText')?.textContent).toContain('로컬 글씨 분석');
+  expect(project!.snapshot.workVersion).toBe(originalWorkVersion);
+  expect(savedColor()).toEqual([190, 180, 170, 255]);
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(0);
+
+  detectedTextMask[0] = 255;
+  click('[data-action="auto-clean"]');
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('complete'));
+  await waitForSaved([255, 255, 255, 255]);
+  expect(textDetectionCalls).toHaveLength(3);
+  expect(new Set(textDetectionCalls.map(call => call.requestId)).size).toBe(3);
+  expect(textDetectionCalls.every(call => /^[0-9a-f-]{36}$/i.test(call.requestId))).toBe(true);
+  expect(textDetectionCalls[2].pixels.data.slice(0, 4)).toEqual(new Uint8ClampedArray([190, 180, 170, 255]));
+  const successfulAutoJob = pixelJobs.filter(request => request.job.type === 'auto-clean').at(-1)!.job as PixelJob & { textMask?: Uint8Array };
+  expect(successfulAutoJob.textMask).toEqual(detectedTextMask);
+  expect(textDetectionCancels).toEqual([cancelledDetectionId]);
+  click('#undoButton'); await waitForSaved([190, 180, 170, 255]);
+  click('#redoButton'); await waitForSaved([255, 255, 255, 255]);
+
+  const beforePixelCancelVersion = project!.snapshot.workVersion;
+  const beforePixelCancelColor = savedColor();
+  holdNextAutoClean = true;
+  click('[data-action="auto-clean"]');
+  await vi.waitFor(() => expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(2));
+  expect(document.querySelector<HTMLButtonElement>('#tabExport')?.disabled).toBe(true);
+  click('#cancelJobButton');
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('cancelled'));
+  expect(project!.snapshot.workVersion).toBe(beforePixelCancelVersion);
+  expect(savedColor()).toEqual(beforePixelCancelColor);
+  const staleWorkerResult = runPixelJob(browserClone(delayedWorkerRequest!.job));
+  delayedWorker!.onmessage?.({ data: { id: delayedWorkerRequest!.id, type: 'result', value: staleWorkerResult } } as MessageEvent<PixelJobResponse>);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('cancelled');
+  expect(project!.snapshot.workVersion).toBe(beforePixelCancelVersion);
+  expect(savedColor()).toEqual(beforePixelCancelColor);
+
+  detectedTextMask.fill(0);
+  click('[data-action="auto-clean"]');
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('unchanged'));
+  expect(document.querySelector('#autoCleanStatus')?.textContent?.trim()).toBe('자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.');
+  expect(project!.snapshot.workVersion).toBe(beforePixelCancelVersion);
+  click('#undoButton'); await waitForSaved([190, 180, 170, 255]);
+  click('#redoButton'); await waitForSaved([255, 255, 255, 255]);
+
   click('button[data-tool="delete"]');
   expect(document.querySelector('#stage')?.hasAttribute('aria-pressed')).toBe(false);
   expect(document.querySelector('#stage')?.classList.contains('active')).toBe(false);
   click('[data-action="select-all"]');
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="fill-white"]')?.disabled).toBe(false));
-  expect(sceneColorAt(148, 112)).toEqual([194, 145, 134, 255]);
+  expect(sceneColorAt(149, 112)).toEqual([194, 145, 134, 255]);
   click('[data-action="fill-white"]');
-  await waitForSaved([255, 255, 255, 255]);
+  await waitForSavedAt(1, [255, 255, 255, 255]);
   expect([...importedPhoto!.data.slice(0, 4)]).toEqual([190, 180, 170, 255]);
   expect(importedPhoto!.data[importedPhoto!.data.length - 1]).toBe(0);
-  click('#undoButton'); await waitForSaved([190, 180, 170, 255]);
-  click('#redoButton'); await waitForSaved([255, 255, 255, 255]);
+  click('#undoButton'); await waitForSavedAt(1, [190, 180, 170, 255]);
+  click('#redoButton'); await waitForSavedAt(1, [255, 255, 255, 255]);
   click('#tabRequest'); click('[data-action="create-request"]');
   await vi.waitFor(() => expect(request).not.toBeNull());
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="copy-request"]')?.disabled).toBe(false));

@@ -1,7 +1,7 @@
 {
   "name": "sketch-cleaner",
   "productName": "Sketch Cleaner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "의류 도해 자동 정리 초안 · 직접 수정 및 로컬 저장",
   "private": true,
   "main": "dist/main/main.js",
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1",
+    "onnxruntime-node": "1.30.0",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
