@@ -11,6 +11,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -26,16 +28,57 @@ jobs:
           $native = "out/Sketch Cleaner-win32-x64/resources/app.asar.unpacked/node_modules/@img"
           if (!(Get-ChildItem $native -Recurse -Filter *.node)) { throw "Native image decoder missing" }
           if (!(Get-ChildItem $native -Recurse -Filter *vips*.dll)) { throw "Image decoder DLL missing" }
-      - name: Test the packaged desktop app
+      - name: Install and verify data separation
         shell: pwsh
         run: |
-          $env:SKETCH_TEST_EXECUTABLE = (Resolve-Path "out/Sketch Cleaner-win32-x64/SketchCleaner.exe").Path
-          npm run test:e2e
+          $identity = node -p "require('./forge.config.cjs').makers[0].config.name"
+          $installRoot = Join-Path $env:LOCALAPPDATA $identity
+          $dataRoot = Join-Path $env:LOCALAPPDATA "SketchCleaner/projects"
+          if ($dataRoot.StartsWith($installRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Project data must be outside the installer directory" }
+          New-Item $dataRoot -ItemType Directory -Force | Out-Null
+          $marker = Join-Path $dataRoot "installer-preservation-check.txt"
+          Set-Content $marker "Preserve projects across installation and removal" -NoNewline
+          $markerHash = (Get-FileHash $marker -Algorithm SHA256).Hash
+          $setup = (Get-ChildItem out/make -Recurse -Filter "SketchCleaner-0.1.0-Setup.exe" | Select-Object -First 1).FullName
+          if (!$setup) { throw "Installer missing" }
+          $result = Start-Process $setup -ArgumentList "--silent" -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Installer failed: $($result.ExitCode)" }
+          $executable = (Get-ChildItem "$installRoot/app-*/SketchCleaner.exe" | Select-Object -First 1).FullName
+          if (!$executable) { throw "Installed executable missing" }
+          if ((Get-FileHash $marker -Algorithm SHA256).Hash -ne $markerHash) { throw "Installation modified project data" }
+          $shell = New-Object -ComObject WScript.Shell
+          $programs = Join-Path $env:APPDATA "Microsoft/Windows/Start Menu/Programs"
+          $shortcuts = @(Get-ChildItem $programs -Recurse -Filter *.lnk | Where-Object { $shell.CreateShortcut($_.FullName).TargetPath.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase) })
+          if (!$shortcuts.Count) { throw "Start menu shortcut missing" }
+          "SKETCH_INSTALLER=$setup" >> $env:GITHUB_ENV
+          "SKETCH_INSTALL_ROOT=$installRoot" >> $env:GITHUB_ENV
+          "SKETCH_TEST_EXECUTABLE=$executable" >> $env:GITHUB_ENV
+          "SKETCH_DATA_MARKER=$marker" >> $env:GITHUB_ENV
+          "SKETCH_DATA_MARKER_HASH=$markerHash" >> $env:GITHUB_ENV
+      - name: Test the installed desktop app
+        run: npm run test:e2e
+      - name: Reinstall and uninstall without deleting project data
+        if: always() && env.SKETCH_INSTALL_ROOT != ''
+        shell: pwsh
+        run: |
+          $result = Start-Process $env:SKETCH_INSTALLER -ArgumentList "--silent" -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Reinstallation failed: $($result.ExitCode)" }
+          if ((Get-FileHash $env:SKETCH_DATA_MARKER -Algorithm SHA256).Hash -ne $env:SKETCH_DATA_MARKER_HASH) { throw "Reinstallation modified project data" }
+          $updater = Join-Path $env:SKETCH_INSTALL_ROOT "Update.exe"
+          $result = Start-Process $updater -ArgumentList "--uninstall", "--silent" -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Uninstall failed: $($result.ExitCode)" }
+          if (Get-ChildItem "$env:SKETCH_INSTALL_ROOT/app-*/SketchCleaner.exe" -ErrorAction SilentlyContinue) { throw "Installed executable remains after uninstall" }
+          if ((Get-FileHash $env:SKETCH_DATA_MARKER -Algorithm SHA256).Hash -ne $env:SKETCH_DATA_MARKER_HASH) { throw "Uninstall modified project data" }
+      - name: Preserve source history for local synchronization
+        if: always()
+        run: git bundle create source-history.bundle --all
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: desktop-verification-evidence
-          path: test-results/**
+          path: |
+            test-results/**
+            source-history.bundle
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4

@@ -196,7 +196,7 @@ function createWindow(): void {
 if (squirrelStartup) {
   app.quit();
 } else {
-  if (process.platform === 'win32') app.setAppUserModelId('com.squirrel.SketchCleaner.SketchCleaner');
+  if (process.platform === 'win32') app.setAppUserModelId('com.squirrel.SketchCleanerDesktop.SketchCleaner');
 
   app.whenReady().then(async () => {
     const root = process.env.LOCALAPPDATA
