@@ -14,10 +14,13 @@
 | 커버리지 | 문장 84.60%, 분기 79.93%, 함수 89.33%, 줄 93.45% | engine, persistence, image, security, errors, renderer/state만 계측. Electron 부팅·preload 및 renderer/main 전체 커버리지가 아님. 분기는 80%에 미달 |
 | `npm run build` | PASS | main/preload 번들, 로컬 UI, 별도 픽셀 Worker 번들 |
 | `npm run package` | PASS | 개발 호스트 macOS arm64에서 패키지 구조 확인. macOS 배포를 제공한다는 뜻이 아님 |
+| Windows CI 빌드·실행 | PASS | Windows Server 2025 x64의 깨끗한 GitHub runner. 51개 테스트·타입·린트·Squirrel 설치 파일 생성·native DLL 포함·패키징된 앱 E2E 통과. Windows 11 실기기 인수와 다름 |
 | `npm audit` | 취약점 0 | 런타임·개발 의존성, lockfile 고정. 향후 신규 취약점이 없음을 보장하지 않음 |
 | `git diff --check` | PASS | 공백·병합 흔적 |
 
-DOM 통합 테스트는 실제 renderer와 픽셀 엔진을 실행하지만, Canvas 그리기·Worker 전달·파일 IPC는 테스트 대역을 사용합니다. 브라우저 레이아웃, GPU 렌더링, 실제 IPC 보안 설정을 실행 검증했다고 주장하지 않습니다.
+DOM 통합 테스트는 실제 renderer와 픽셀 엔진을 실행하지만, Canvas 그리기·Worker 전달·파일 IPC는 테스트 대역을 사용합니다. 이 DOM 검사만으로 브라우저 레이아웃, GPU 렌더링, 실제 IPC 보안 설정의 실행 검증을 주장하지 않습니다.
+
+실제 Electron 검증은 [Windows CI 실행 8](https://github.com/tjgurdls9/sketch-cleaner/actions/runs/39206619896)에서 별도로 통과했습니다. 패키징된 앱에서 파일 열기, 실제 Worker 편집, 저장/다시 읽기, 요청 파일, 실제 마우스 올가미·보호, 후보 이동·겹쳐 보기·부분 적용, 최종 PNG의 선택/비선택/완전 보호 픽셀과 원본 해시, 격리 설정을 검사했습니다. 파일 선택 대화상자의 반환값만 테스트에서 지정하며 이미지·Worker·IPC·저장소는 실제 코드를 사용합니다. 화면 캡처도 확인했습니다.
 
 ## 스펙 인수 항목 대조
 
@@ -54,8 +57,8 @@ DOM 통합 테스트는 실제 renderer와 픽셀 엔진을 실행하지만, Can
 ## 실행 환경 제한과 알려진 한계
 
 - 개발 호스트의 Electron과 headless Chrome이 macOS `_RegisterApplication` 단계에서 SIGABRT로 종료되어 GUI/E2E 실행 검증을 완료하지 못했습니다. 앱 코드 로드 이전 실패이며 성공으로 처리하지 않았습니다.
-- `npm run test:e2e`: 실제 Electron/패키징 앱 경로를 사용하는 검사 준비. 로컬 실행 실패. Windows CI 실행 결과는 아직 없음.
-- 실제 브라우저도 이 세션에서 기동하지 못했습니다. 화면 검증은 Windows의 패키징 앱 E2E와 실기기 인수에 남아 있습니다. DOM 테스트 통과와 다릅니다.
+- `npm run test:e2e`: 로컬 실행은 실패했지만 Windows Server 2025 CI에서 실제 패키징 앱 E2E는 통과했습니다. 설치 프로그램의 설치/재설치/제거 보존 검사는 추가 검증 중입니다.
+- 개발 호스트의 실제 브라우저도 이 세션에서 기동하지 못했습니다. Windows CI 화면 캡처는 확인했으며, Windows 11 실기기·DPI·업무 사진의 시각 검수는 남아 있습니다.
 - 취소 이력은 세션 내에서만 유지하며 메모리 예산 512MiB에 따라 오래된 이력이 잘릴 수 있습니다. 최소 직전 상태와 기준 변환은 일시적으로 예산을 넘을 수 있음.
 - Worker 결과 버퍼는 전송하고 같은 기준 이미지는 공유하지만 입력 복사·후보·PNG 인코딩은 큰 메모리를 사용합니다. 20MP/25MP 실제 Windows 메모리·응답 시간은 측정하지 못함.
 - 매 확정 편집 후 약 1.2초에 자동 저장을 시작합니다. **2초 안에 디스크 저장 완료를 보장하지 않습니다.** 사진 크기·요청 수·저장 장치에 따라 실기기 시험 후 조정 필요.

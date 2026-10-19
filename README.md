@@ -12,6 +12,10 @@ Windows 11 x64용 의류 작업지 편집 앱입니다. 지울 곳을 빨강으�
 - [Git 작업 규칙](docs/GIT_PROTOCOL.md)
 - [검증·보안 기록](docs/ACCEPTANCE.md)
 
+## Windows 테스트 설치
+
+전달받은 ZIP의 압축을 풀고 `SketchCleaner-0.1.0-Setup.exe`를 실행한 뒤 시작 메뉴의 **Sketch Cleaner**를 엽니다. GitHub에서는 Actions의 검증된 `Windows test build` 실행 하단에 있는 `SketchCleaner-Windows-x64-TEST-unsigned` 파일로 제공합니다. Artifact 보관 기간은 14일입니다. 서명이 없는 테스트 설치 파일이므로 Windows 경고가 표시될 수 있습니다.
+
 ## 개발자용
 
 Node 24와 npm을 사용하는 Electron + TypeScript + Canvas 2D 앱입니다. 최종 사용자에게 이 절차를 요구하지 않습니다.
