@@ -20,7 +20,7 @@ import {
   undoHistory,
   viewToImage,
 } from '../src/core/engine';
-import type { PixelJobRequest, PixelJobResponse } from '../src/core/worker-protocol';
+import type { PixelJob, PixelJobRequest, PixelJobResponse } from '../src/core/worker-protocol';
 
 const pixels = (width: number, height: number, color: [number, number, number, number] = [0, 0, 0, 255]): Pixels => {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -50,7 +50,7 @@ describe('pixel snapshot invariants', () => {
   });
 
   it('keeps soft brush edges bounded and scales full coverage by strength', () => {
-    const state = paintStroke(snapshot(), [{ x: 2.5, y: 2.5 }], { radius: 3, strength: 0.25, hardness: 0.5 }, 'delete');
+    const state = paintStroke(snapshot(), [{ x: 2.5, y: 2.5 }], { radius: 2.5, strength: 0.25, hardness: 0.5 }, 'delete');
     const center = state.deleteMask[2 * 5 + 2];
     const edge = state.deleteMask[2 * 5 + 4];
     expect(center).toBeGreaterThan(0);
@@ -58,6 +58,18 @@ describe('pixel snapshot invariants', () => {
     expect(edge).toBeGreaterThanOrEqual(0);
     expect(edge).toBeLessThan(center);
     expect(state.deleteMask[0]).toBe(0);
+  });
+
+  it('rasterizes a 500-point diagonal locally and applies opacity once per stroke', () => {
+    const start = snapshot(1024, 1024);
+    const points = Array.from({ length: 500 }, (_, index) => ({ x: 5 + index * 2.03, y: 5 + index * 2.03 }));
+    const began = Date.now();
+    const result = paintStroke(start, points, { radius: 4, strength: 0.4, hardness: 0.8 }, 'delete');
+    const elapsed = Date.now() - began;
+    const center = result.deleteMask[512 * 1024 + 512];
+    expect(center).toBeGreaterThan(0);
+    expect(center).toBeLessThanOrEqual(102);
+    expect(elapsed).toBeLessThan(2000);
   });
 
   it('protecting restores base bytes and unselecting clears both masks without touching working pixels', () => {
@@ -141,8 +153,8 @@ describe('candidate and geometry operations', () => {
       if (i % 7 === 0) state.deleteMask[i] = 0;
       if (i % 11 === 0) {
         state.protectMask[i] = 255;
-        state.working.set(state.base.subarray(i * 4, i * 4 + 4), i * 4);
       }
+      if (state.protectMask[i] === 255) state.working.data.set(state.base.data.subarray(i * 4, i * 4 + 4), i * 4);
     }
     const result = applyCandidate(state, candidate, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
     for (let i = 0; i < state.deleteMask.length; i++) {
@@ -160,6 +172,17 @@ describe('candidate and geometry operations', () => {
     const result = applyCandidate(state, candidate, { a: 1, b: 0, c: 0, d: 1, e: 1, f: 0 });
     expect(at(result.working, 0, 0)).toEqual(at(state.working, 0, 0));
     expect(at(result.working, 1, 0)).toEqual([220, 180, 140, 100]);
+  });
+
+  it('uses D × (1 - P) for partial mask blending across all RGBA bytes', () => {
+    const state = snapshot(1, 1);
+    state.working.data.set([10, 20, 30, 40]);
+    state.deleteMask[0] = 128;
+    state.protectMask[0] = 64;
+    const candidate = pixels(1, 1, [210, 220, 230, 240]);
+    const result = applyCandidate(state, candidate, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+    const amount = (128 / 255) * (1 - 64 / 255);
+    expect(at(result.working, 0, 0)).toEqual([10, 20, 30, 40].map((value, channel) => Math.round(value * (1 - amount) + [210, 220, 230, 240][channel] * amount)));
   });
 
   it('round-trips image/view coordinates under zoom and pan', () => {
@@ -201,7 +224,8 @@ describe('undo and redo', () => {
   it('restores complete snapshots and gives every history transition a fresh workVersion', () => {
     const initial = snapshot(3, 2);
     const history = createHistory(initial);
-    const edited = paintStroke(initial, [{ x: 1.5, y: 0.5 }], brush, 'delete');
+    const historyBrush = { radius: 0.4, strength: 1, hardness: 1 };
+    const edited = paintStroke(initial, [{ x: 1.5, y: 0.5 }], historyBrush, 'delete');
     const afterEdit = commitHistory(history, edited);
     const undo = undoHistory(afterEdit);
     expect(historySnapshot(undo).deleteMask).toEqual(initial.deleteMask);
@@ -209,10 +233,35 @@ describe('undo and redo', () => {
     const redo = redoHistory(undo);
     expect(historySnapshot(redo).deleteMask).toEqual(edited.deleteMask);
     expect(historySnapshot(redo).workVersion).toBeGreaterThan(historySnapshot(undo).workVersion);
+    const secondEdit = paintStroke(historySnapshot(redo), [{ x: 2.5, y: 1.5 }], historyBrush, 'delete');
+    const twoEdits = commitHistory(redo, secondEdit);
+    expect(twoEdits.past).toHaveLength(2);
+    expect(historySnapshot(undoHistory(twoEdits)).deleteMask).toEqual(historySnapshot(redo).deleteMask);
+    expect(commitHistory(twoEdits, historySnapshot(twoEdits))).toBe(twoEdits);
+    const emptyHistory = createHistory(initial);
+    expect(undoHistory(emptyHistory)).toBe(emptyHistory);
+    expect(redoHistory(emptyHistory)).toBe(emptyHistory);
   });
 });
 
 describe('pixel worker jobs', () => {
+  it('dispatches each supported job type', () => {
+    const state = snapshot(3, 2);
+    const jobs: PixelJob[] = [
+      { type: 'guide', snapshot: state },
+      { type: 'candidate', snapshot: state, candidate: pixels(3, 2), transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } },
+      { type: 'stroke', snapshot: state, points: [{ x: 1.5, y: 0.5 }], brush, tool: 'delete' },
+      { type: 'restore', snapshot: state, points: [{ x: 1.5, y: 0.5 }], brush },
+      { type: 'lasso', snapshot: state, polygon: [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 2 }], mode: 'inside' },
+      { type: 'rotate', snapshot: state, degrees: 90 },
+      { type: 'crop', snapshot: state, rect: { x: 0, y: 0, width: 2, height: 2 } },
+      { type: 'fill', snapshot: state, fill: { kind: 'white' } },
+      { type: 'adjust', snapshot: state, adjustment: { brightness: 1, contrast: 0 } },
+    ];
+    for (const job of jobs) expect(runPixelJob(job)).toBeTruthy();
+    expect(() => runPixelJob({ type: 'invalid' } as unknown as PixelJob)).toThrow();
+  });
+
   it('runs a typed lasso job and reports incremental row progress', () => {
     const request: PixelJobRequest = {
       id: 'lasso-1',
