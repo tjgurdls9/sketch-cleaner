@@ -18,6 +18,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: npm run prepare:model
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:coverage
@@ -28,6 +29,12 @@ jobs:
           $native = "out/Sketch Cleaner-win32-x64/resources/app.asar.unpacked/node_modules/@img"
           if (!(Get-ChildItem $native -Recurse -Filter *.node)) { throw "Native image decoder missing" }
           if (!(Get-ChildItem $native -Recurse -Filter *vips*.dll)) { throw "Image decoder DLL missing" }
+          $ort = "out/Sketch Cleaner-win32-x64/resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64"
+          if (!(Get-ChildItem $ort -Filter *.node)) { throw "ONNX native binding missing" }
+          if (!(Test-Path "$ort/onnxruntime.dll")) { throw "ONNX runtime DLL missing" }
+          $manifest = Get-Content models/model.json -Raw | ConvertFrom-Json
+          $model = "out/Sketch Cleaner-win32-x64/resources/models/text-det.onnx"
+          if ((Get-FileHash $model -Algorithm SHA256).Hash.ToLower() -ne $manifest.sha256) { throw "Bundled model checksum mismatch" }
       - name: Install and verify data separation
         shell: pwsh
         run: |

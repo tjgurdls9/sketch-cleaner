@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
 import { resolve } from 'node:path';
+import { InferenceSession } from 'onnxruntime-node';
 import type { Pixels } from '../src/shared/types';
 import { MAX_PIXELS } from '../src/shared/types';
 import { detectTextMask } from '../src/main/ai';
@@ -49,6 +50,27 @@ describe('local text detector', () => {
 
     await expect(detectTextMask({ width: 2, height: 2, data: new Uint8ClampedArray(15) }, MODEL_PATH))
       .rejects.toThrow(/RGBA|buffer|pixel/i);
+  });
+
+  it('rejects malformed probability tensor shapes and non-finite model values', async () => {
+    const pixels: Pixels = { width: 32, height: 24, data: new Uint8ClampedArray(32 * 24 * 4).fill(255) };
+    const session = {
+      inputNames: ['image'],
+      outputNames: ['maps'],
+      run: vi.fn(),
+      release: vi.fn(async () => undefined),
+    };
+    const createSession = vi.spyOn(InferenceSession, 'create')
+      .mockResolvedValue(session as unknown as Awaited<ReturnType<typeof InferenceSession.create>>);
+
+    session.run.mockResolvedValueOnce({ maps: { type: 'float32', dims: [1, 2, 1, 1], data: new Float32Array([0, 0]) } });
+    await expect(detectTextMask(pixels, 'mocked-model')).rejects.toThrow(/output|dimensions/i);
+    expect(session.release).toHaveBeenCalledOnce();
+
+    session.run.mockResolvedValueOnce({ maps: { type: 'float32', dims: [1, 1, 1, 1], data: new Float32Array([Number.NaN]) } });
+    await expect(detectTextMask(pixels, 'mocked-model')).rejects.toThrow(/probability/i);
+    expect(session.release).toHaveBeenCalledTimes(2);
+    createSession.mockRestore();
   });
 
   it('detects printed text outside a garment, ignores transparent RGB, and leaves input bytes untouched', async () => {

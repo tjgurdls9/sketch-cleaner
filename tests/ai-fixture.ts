@@ -5,11 +5,12 @@ export const AI_FIXTURE = {
   height: 720,
   english: { left: 42, top: 34, right: 300, bottom: 85 },
   korean: { left: 42, top: 91, right: 300, bottom: 136 },
-  tableInk: { x: 66, y: 540 },
+  tableInk: { x: 66, y: 530 },
   redArrow: { x: 273, y: 250 },
-  garmentSeam: { x: 414, y: 227 },
+  manualFix: { x: 464, y: 370 },
+  garmentSeam: { x: 424, y: 227 },
   garmentButton: { x: 418, y: 292 },
-  garmentStitch: { x: 352, y: 406 },
+  garmentStitch: { x: 380, y: 242 },
 } as const;
 
 /**
@@ -47,6 +48,7 @@ export async function makeAIFixture(): Promise<Buffer> {
     <circle cx="418" cy="292" r="4" fill="#282723"/>
     <circle cx="418" cy="324" r="4" fill="#282723"/>
     <path d="M406 259 L430 259 M406 291 L430 291 M406 323 L430 323" stroke="#6f695e" stroke-width="1.5"/>
+    <path d="M454 365 Q460 359 465 366 L470 375" fill="none" stroke="#ed211d" stroke-width="5" stroke-linecap="round"/>
 
     <path d="M567 267 Q622 251 686 262 L788 278 L773 366 L722 358 L711 629 L650 629 L637 418 L622 629 L559 629 L567 360 L519 370 L510 289 Z"
       fill="url(#trouser)" stroke="#262522" stroke-width="5" stroke-linejoin="round"/>

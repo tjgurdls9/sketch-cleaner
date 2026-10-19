@@ -297,7 +297,7 @@ function setProject(project: Project): void {
   state.history = createHistory(project.snapshot);
   state.panel = 'edit';
   state.tool = 'delete';
-  state.showMasks = true;
+  state.showMasks = false;
   state.autoCleanStatus = 'idle';
   state.compareMode = 'side';
   state.candidateScale = 1;
@@ -306,6 +306,7 @@ function setProject(project: Project): void {
   state.candidateY = 0;
   selectPanelTab('edit');
   setTool('delete');
+  state.showMasks = false;
   state.imported = null;
   state.requestBundle = null;
   state.requestId = project.requests.at(-1)?.id ?? '';
@@ -317,7 +318,7 @@ function setProject(project: Project): void {
   state.dirty = false;
   state.saveFailed = false;
   state.exportResult = null;
-  $('#maskToggleButton').setAttribute('aria-pressed', 'true');
+  syncMaskToggle();
   editRevision = 0;
   fitView();
   renderHeader();
@@ -340,14 +341,14 @@ function setProject(project: Project): void {
 
 async function confirmReplace(): Promise<boolean> {
   while (true) {
-    if (!state.dirty && !pendingSave && !savePump && !state.saveFailed && !worker) return true;
+    if (!state.dirty && !pendingSave && !savePump && !state.saveFailed && !document.body.classList.contains('is-processing')) return true;
     const projectId = state.project?.id ?? null;
     const snapshot = state.snapshot;
     const revision = editRevision;
     const epoch = projectEpoch;
     if (!window.confirm('저장되지 않은 변경사항이나 진행 중인 처리가 있습니다. 현재 작업을 닫고 새 작업을 여시겠어요? 마지막 정상 저장본은 보존됩니다.')) return false;
     window.clearTimeout(saveTimer);
-    if (worker) cancelWorker();
+    if (cancelCurrentWorker) cancelWorker();
     if (savePump) await savePump;
     if (state.project?.id !== projectId || state.snapshot !== snapshot || editRevision !== revision || projectEpoch !== epoch) continue;
     pendingSave = null;
@@ -360,10 +361,10 @@ function safeTextError(error: unknown, fallback: string): string {
   return /[가-힣]/.test(error.message) ? error.message : `${fallback} (${error.message})`;
 }
 
-function setProcessing(label: string, percent = 0): void {
+function setProcessing(label: string, percent = 0, indeterminate = false): void {
   if (!document.body.classList.contains('is-processing')) {
     blockedControls = Array.from(document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement>(
-      '.tool-rail button, .tool-rail input, .inspector button, .inspector input, .inspector textarea, .top-actions button, .canvas-toolbar button, .canvas-footer button',
+      '.tool-rail button, .tool-rail input, .inspector button, .inspector input, .inspector textarea, .top-actions button, .project-menu button, .canvas-toolbar button, .canvas-footer button',
     )).filter(element => element.id !== 'cancelJobButton').map(element => {
       const saved = { element, wasDisabled: element.disabled };
       element.disabled = true;
@@ -372,8 +373,10 @@ function setProcessing(label: string, percent = 0): void {
     document.body.classList.add('is-processing');
   }
   $('#processingLabel').textContent = label;
-  $('#progressText').textContent = percent > 0 ? `${Math.round(percent)}%` : '준비 중';
-  ($('#progressBar') as HTMLProgressElement).value = Math.max(4, Math.min(100, percent));
+  $('#progressText').textContent = indeterminate ? '로컬 분석' : percent > 0 ? `${Math.round(percent)}%` : '준비 중';
+  const progress = $('#progressBar') as HTMLProgressElement;
+  if (indeterminate) progress.removeAttribute('value');
+  else progress.value = Math.max(4, Math.min(100, percent));
   $('#processingOverlay').removeAttribute('hidden');
 }
 
@@ -393,7 +396,10 @@ function runPixelJob(job: PixelJob, label: string): Promise<Snapshot | Pixels> {
   worker = nextWorker;
   setProcessing(label);
   return new Promise((resolve, reject) => {
+    let finished = false;
     const finish = (): void => {
+      if (finished) return;
+      finished = true;
       if (worker === nextWorker) worker = null;
       if (cancelCurrentWorker === cancel) cancelCurrentWorker = null;
       nextWorker.terminate();
@@ -405,6 +411,7 @@ function runPixelJob(job: PixelJob, label: string): Promise<Snapshot | Pixels> {
     };
     cancelCurrentWorker = cancel;
     nextWorker.onmessage = (event: MessageEvent<PixelJobResponse>): void => {
+      if (finished) return;
       const response = event.data;
       if (response.id !== id) return;
       if (response.type === 'progress') {
@@ -419,6 +426,7 @@ function runPixelJob(job: PixelJob, label: string): Promise<Snapshot | Pixels> {
       }
     };
     nextWorker.onerror = (event: ErrorEvent): void => {
+      if (finished) return;
       finish();
       reject(new Error(event.message || '이미지를 처리하지 못했습니다.'));
     };
@@ -911,14 +919,21 @@ function syncMaskToggle(): void {
 
 async function runAutomaticCleanup(): Promise<void> {
   const snapshot = state.snapshot;
-  if (!snapshot || !state.project) return;
+  if (!snapshot || !state.project || document.body.classList.contains('is-processing')) return;
   const token = captureEditToken(snapshot);
   const previousMaskVisibility = state.showMasks;
   state.autoCleanStatus = 'running';
   renderInspector();
-  announce('자동 정리를 시작했습니다. 진행률은 캔버스에서 확인할 수 있습니다.');
+  const requestId = crypto.randomUUID();
+  setProcessing('로컬 모델이 글씨 범위를 살펴보고 있습니다', 0, true);
+  announce('로컬 분석을 시작했습니다. 취소해도 사진과 편집 내용은 유지됩니다.');
   try {
-    const next = await runPixelJob({ type: 'auto-clean', snapshot }, '분리된 주변 표시를 자동으로 정리하고 있습니다') as Snapshot;
+    const textMask = await detectTextMask(snapshot, requestId);
+    if (!isEditTokenCurrent(token)) {
+      clearProcessing();
+      return;
+    }
+    const next = await runPixelJob({ type: 'auto-clean', snapshot, textMask }, '확실한 주변 표시를 정리하고 있습니다') as Snapshot;
     if (!isEditTokenCurrent(token)) return;
     if (next.workVersion === snapshot.workVersion) {
       state.showMasks = false;
@@ -935,7 +950,11 @@ async function runAutomaticCleanup(): Promise<void> {
     if (!commitWorkerSnapshot(next, token)) return;
     announce('자동 정리가 끝났습니다. 결과를 확인하고 필요한 곳을 직접 수정하세요.');
   } catch (error) {
-    if (!isEditTokenCurrent(token)) return;
+    if (!isEditTokenCurrent(token)) {
+      clearProcessing();
+      return;
+    }
+    clearProcessing();
     state.showMasks = previousMaskVisibility;
     syncMaskToggle();
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -950,6 +969,42 @@ async function runAutomaticCleanup(): Promise<void> {
       showError(safeTextError(error, '자동 정리를 마치지 못했습니다. 사진은 유지되어 직접 수정할 수 있습니다.'));
     }
   }
+}
+
+function detectTextMask(snapshot: Snapshot, requestId: string): Promise<Uint8Array> {
+  setProcessing('로컬 모델이 글씨 범위를 살펴보고 있습니다', 0, true);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const release = (): void => {
+      settled = true;
+      if (cancelCurrentWorker === cancel) cancelCurrentWorker = null;
+    };
+    const cancel = (): void => {
+      if (settled) return;
+      release();
+      void Promise.resolve().then(() => desktop().cancelTextDetection(requestId)).catch(() => undefined);
+      clearProcessing();
+      reject(new DOMException('로컬 분석을 취소했습니다.', 'AbortError'));
+    };
+    cancelCurrentWorker = cancel;
+    Promise.resolve().then(() => desktop().detectText(snapshot.working, requestId)).then(reply => {
+      if (settled) return;
+      release();
+      try {
+        const mask = value(reply, '로컬 글씨 분석을 마치지 못했습니다.');
+        if (!(mask instanceof Uint8Array) || mask.length !== snapshot.working.width * snapshot.working.height) {
+          throw new Error('로컬 글씨 분석 결과의 크기가 사진과 다릅니다. 다시 시도해 주세요.');
+        }
+        resolve(mask);
+      } catch (error) {
+        reject(error);
+      }
+    }, error => {
+      if (settled) return;
+      release();
+      reject(error instanceof Error ? error : new Error('로컬 글씨 분석을 마치지 못했습니다.'));
+    });
+  });
 }
 
 async function openImported(image: ImportedImage, openingRevision: number): Promise<void> {
@@ -980,7 +1035,6 @@ async function openImported(image: ImportedImage, openingRevision: number): Prom
   state.showMasks = false;
   syncMaskToggle();
   renderCanvas();
-  void runAutomaticCleanup();
   await refreshRecent();
 }
 
@@ -1161,8 +1215,8 @@ function selectPanelTab(panel: Panel): void {
 
 function autoCleanDescription(): string {
   const messages: Record<AutoCleanStatus, { title: string; detail: string }> = {
-    idle: { title: '자동 정리 결과를 확인하세요', detail: '자동 정리를 다시 실행하거나 도구를 골라 직접 수정할 수 있습니다.' },
-    running: { title: '자동 정리 중입니다', detail: '분리된 주변 표시를 확인합니다. 취소해도 사진은 유지됩니다.' },
+    idle: { title: '원본 미리보기입니다', detail: '자동 정리는 글씨 범위를 참고해 주변의 분리된 표시를 정리합니다. 선과 겹쳐 판단하기 어려운 곳은 직접 수정하세요.' },
+    running: { title: '자동 정리 중입니다', detail: '먼저 로컬 모델이 글씨 범위를 살펴본 뒤 정리합니다. 취소해도 사진은 유지됩니다.' },
     complete: { title: '자동 정리를 적용했습니다', detail: '결과 선을 살펴보고 필요한 곳은 직접 수정하세요.' },
     unchanged: { title: '', detail: '자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.' },
     cancelled: { title: '자동 정리를 취소했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
@@ -1183,11 +1237,11 @@ function renderInspector(): void {
   if (state.panel === 'edit') {
     inspector.innerHTML = hasImage ? `
       <h2 class="panel-heading">사진 정리 결과</h2>
-      <p class="panel-intro">사진을 열면 분리된 주변 표시부터 정리합니다. 선과 겹치거나 판단이 어려운 곳은 결과를 확인해 직접 고쳐 주세요.</p>
+      <p class="panel-intro">원본을 먼저 확인하세요. 글씨 범위를 참고해 주변의 분리된 표시를 정리하고, 선과 겹쳐 판단하기 어려운 곳은 직접 고칩니다.</p>
       <section class="panel-block">
         <h3>자동 정리</h3>
         <div id="autoCleanStatus" class="auto-clean-status" data-state="${state.autoCleanStatus}" role="status" aria-live="polite">${autoCleanDescription()}</div>
-        <button class="button button-primary wide-button" type="button" data-action="auto-clean">자동 정리 다시 하기</button>
+        <button class="button button-primary wide-button" type="button" data-action="auto-clean">자동 정리</button>
         <button class="small-button small-button-accent wide-button result-save-action" type="button" data-action="go-export">결과 확인 및 저장</button>
       </section>
       <section class="panel-block">
@@ -1831,7 +1885,7 @@ function keyDown(event: KeyboardEvent): void {
     event.preventDefault();
     return;
   }
-  if (worker && event.key.toLowerCase() !== 'escape') return;
+  if (document.body.classList.contains('is-processing') && event.key.toLowerCase() !== 'escape') return;
   if (editingField(event.target) || event.altKey) return;
   const key = event.key.toLowerCase();
   if (key === 'o') { event.preventDefault(); void chooseImage(); }
@@ -1840,7 +1894,7 @@ function keyDown(event: KeyboardEvent): void {
   else if (key === '+' || key === '=') { event.preventDefault(); zoomAt(state.view.zoom * 1.2); }
   else if (key === '-' || key === '_') { event.preventDefault(); zoomAt(state.view.zoom / 1.2); }
   else if (key === 'escape') {
-    if (worker) cancelWorker();
+    if (cancelCurrentWorker) cancelWorker();
     else if (state.tool === 'crop') {
       state.cropRect = null;
       endDraft();

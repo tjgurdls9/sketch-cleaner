@@ -159,14 +159,107 @@ function componentIsGarment(bounds: Bounds, analysisWidth: number, analysisHeigh
     && density >= 0.012 && density <= 0.5;
 }
 
-export function autoCleanDraft(snapshot: Snapshot, progress?: Progress): Snapshot {
+function labelComponentFlags(components: readonly Bounds[], gridPixels: number, minimum: number, maximumRatio: number): Uint8Array {
+  const flags = new Uint8Array(components.length + 1);
+  for (let index = 0; index < components.length; index += 1) {
+    const component = components[index];
+    const width = component.right - component.left + 1;
+    const height = component.bottom - component.top + 1;
+    if (component.count >= minimum && component.count <= Math.floor(gridPixels * maximumRatio)
+      && width <= Math.floor(gridPixels ** 0.5 * 0.35) && height <= Math.floor(gridPixels ** 0.5 * 0.35)) {
+      flags[index + 1] = 1;
+    }
+  }
+  return flags;
+}
+
+function cleanWithTextMask(
+  snapshot: Snapshot,
+  textMask: Uint8Array,
+  keep: Uint8Array,
+  inkLabels: Int32Array,
+  gridFlags: Uint8Array,
+  redLabels: Int32Array,
+  redFlags: Uint8Array,
+  shadowLabels: Int32Array,
+  shadowFlags: Uint8Array,
+  gridWidth: number,
+  gridHeight: number,
+  progress?: Progress,
+  progressOffset = 0,
+  progressTotal = snapshot.working.height,
+): Snapshot {
+  const { width, height } = snapshot.working;
+  let deleteMask = snapshot.deleteMask;
+  let working = snapshot.working.data;
+  let changed = false;
+
+  for (let y = 0; y < height; y += 1) {
+    const gridY = Math.min(gridHeight - 1, Math.floor(y * gridHeight / height));
+    const row = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const index = row + x;
+      const gridX = Math.min(gridWidth - 1, Math.floor(x * gridWidth / width));
+      const cell = gridY * gridWidth + gridX;
+      const insideFigure = keep[cell] !== 0;
+      const autoDelete = !insideFigure && (textMask[index] === 255
+        || gridFlags[inkLabels[cell]] === 1
+        || redFlags[redLabels[cell]] === 1
+        || shadowFlags[shadowLabels[cell]] === 1);
+      const previousMask = snapshot.deleteMask[index];
+      if (autoDelete && previousMask !== 255) {
+        if (deleteMask === snapshot.deleteMask) deleteMask = snapshot.deleteMask.slice();
+        deleteMask[index] = 255;
+        changed = true;
+      }
+
+      const offset = index * 4;
+      const protectedPixel = snapshot.protectMask[index] === 255;
+      if (!autoDelete && !protectedPixel) continue;
+      let differs = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const target = protectedPixel
+          ? snapshot.base.data[offset + channel]
+          : Math.round(snapshot.working.data[offset + channel] * (snapshot.protectMask[index] / 255) + 255 * (1 - snapshot.protectMask[index] / 255));
+        if (target !== snapshot.working.data[offset + channel]) differs = true;
+      }
+      if (!differs) continue;
+      if (working === snapshot.working.data) working = snapshot.working.data.slice();
+      for (let channel = 0; channel < 4; channel += 1) {
+        working[offset + channel] = protectedPixel
+          ? snapshot.base.data[offset + channel]
+          : Math.round(snapshot.working.data[offset + channel] * (snapshot.protectMask[index] / 255) + 255 * (1 - snapshot.protectMask[index] / 255));
+      }
+      changed = true;
+    }
+    progress?.(progressOffset + y + 1, progressTotal);
+  }
+
+  if (!changed) {
+    progress?.(progressTotal, progressTotal);
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    working: working === snapshot.working.data ? snapshot.working : { ...snapshot.working, data: working },
+    deleteMask,
+    workVersion: snapshot.workVersion + 1,
+  };
+}
+
+export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask?: Uint8Array): Snapshot {
   const { width, height, data } = snapshot.working;
+  if (textMask !== undefined) {
+    if (!(textMask instanceof Uint8Array) || textMask.length !== width * height) throw new RangeError('Invalid text mask buffer');
+    for (const value of textMask) if (value !== 0 && value !== 255) throw new RangeError('Text mask values must be 0 or 255');
+  }
   const size = analysisSize(width, height);
   const gridWidth = size.width;
   const gridHeight = size.height;
   const gridPixels = gridWidth * gridHeight;
   const ink = new Uint8Array(gridPixels);
   const shadow = new Uint8Array(gridPixels);
+  const red = textMask ? new Uint8Array(gridPixels) : undefined;
   const total = gridHeight * 2 + height;
 
   for (let gy = 0; gy < gridHeight; gy += 1) {
@@ -178,17 +271,20 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress): Snapsho
       const cell = gy * gridWidth + gx;
       let hasInk = false;
       let hasShadow = false;
-      for (let y = top; y < bottom && !(hasInk && hasShadow); y += 1) {
+      let hasRed = false;
+      for (let y = top; y < bottom && !(hasInk && hasShadow && (!red || hasRed)); y += 1) {
         let offset = (y * width + left) * 4;
-        for (let x = left; x < right && !(hasInk && hasShadow); x += 1, offset += 4) {
+        for (let x = left; x < right && !(hasInk && hasShadow && (!red || hasRed)); x += 1, offset += 4) {
           const kind = pixelKind(data, offset);
           if (kind === 'ink') hasInk = true;
           else if (kind === 'shadow') hasShadow = true;
+          else if (kind === 'red') hasRed = true;
           else if (isAntialiasedInk(data, offset)) hasInk = true;
         }
       }
       ink[cell] = hasInk ? 1 : 0;
       shadow[cell] = hasShadow ? 1 : 0;
+      if (red) red[cell] = hasRed ? 1 : 0;
     }
     progress?.(gy + 1, total);
   }
@@ -242,6 +338,28 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress): Snapsho
   anchors.sort((a, b) => b.bounds.count - a.bounds.count);
   const selectedAnchors = anchors.filter((anchor, index) => index < 4 && anchor.bounds.count >= Math.max(20, largestAnchor * 0.12));
   const keep = makeKeepRegions(labels, gridWidth, gridHeight, selectedAnchors);
+  if (textMask && red) {
+    const redRegions = labelInk(red, gridWidth, gridHeight);
+    const shadowRegions = labelInk(shadow, gridWidth, gridHeight);
+    const redFlags = labelComponentFlags(redRegions.components, gridPixels, 2, 0.02);
+    const shadowFlags = labelComponentFlags(shadowRegions.components, gridPixels, Math.max(5, Math.floor(gridPixels * 0.00002)), 0.2);
+    return cleanWithTextMask(
+      snapshot,
+      textMask,
+      keep,
+      labels,
+      gridFlags,
+      redRegions.labels,
+      redFlags,
+      shadowRegions.labels,
+      shadowFlags,
+      gridWidth,
+      gridHeight,
+      progress,
+      gridHeight * 2,
+      total,
+    );
+  }
   const anchorIds = new Uint8Array(components.length + 1);
   for (const anchor of selectedAnchors) anchorIds[anchor.id] = 1;
   for (let index = 0; index < components.length; index += 1) {

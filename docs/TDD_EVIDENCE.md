@@ -2,6 +2,10 @@
 
 출처: [구현 계획](../plans/implementation.md), [구현 스펙](../IMPLEMENTATION_SPEC.md). 실제 실행 결과는 [인수 기록](ACCEPTANCE.md)에 구분합니다.
 
+## 0.3.0 로컬 AI
+
+RED 체크포인트 a909d71: AI 모듈/제한 실행 manager 미구현, 이전 사진 열기 자동 실행, textMask 미지원으로 새 인수 테스트가 실패했다. 각각 실제 모델 양성 검출·보호·기존 선택 독립, 취소/timeout/오류, 한 단계 이력으로 구현해 통과했다. AGY의 default import 문제를 놓치지 않도록 CJS 번들 추론과 실제 Node Worker 실행을 별도 검사한다. 최종 72개 자동 테스트 및 인수 계측 수치는 ACCEPTANCE.md를 따른다.
+
 ## 0.2.0 자동 초안
 
 - RED 체크포인트 `6d9c870`: 원본에 실제 필기·표·붉은 화살표가 포함된 입력의 자동 제거/도해 보존, 보호 혼합, 저확신 무변경, 결정성/불변성, 20MP 입력의 5개 테스트가 미구현 `auto-clean` 작업으로 실패했다.

@@ -1,0 +1,23 @@
+This application redistributes the RapidOCR PP-OCRv4 mobile text-detection ONNX model.
+
+Model: ch_PP-OCRv4_det_mobile.onnx
+Pinned artifact URL: https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx
+SHA-256: d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9
+Upstream revision: v3.10.0
+License: Apache License 2.0
+
+RapidOCR's model inventory and digest are recorded in its v3.10.0 `default_models.yaml`:
+https://github.com/RapidAI/RapidOCR/blob/v3.10.0/python/rapidocr/default_models.yaml
+
+RapidOCR states that its hosted ONNX files derive from official PaddleOCR models, that copyright in upstream weights belongs to Baidu and/or the respective PaddleOCR rights holders, and that the applicable upstream and converted model artifacts are distributed under Apache-2.0:
+https://github.com/RapidAI/RapidOCR/blob/v3.10.0/README.md
+
+The PaddleOCR project license is available at:
+https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE
+
+The complete Apache License 2.0 text is included in this directory's LICENSE file.
+ONNX Runtime 1.30.0 (CPU runtime)
+Copyright (c) Microsoft Corporation. All rights reserved.
+MIT License: see ONNXRUNTIME-LICENSE; dependency notices: ONNXRUNTIME-NOTICES.
+Sources: https://github.com/microsoft/onnxruntime/tree/v1.30.0
+

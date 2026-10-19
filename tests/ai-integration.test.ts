@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import { afterAll, describe, expect, it } from 'vitest';
 import { autoCleanDraft } from '../src/core/automatic';
 import { createSnapshot } from '../src/core/engine';
-import type { DesktopAPI, Pixels } from '../src/shared/types';
+import type { Pixels } from '../src/shared/types';
 import { AI_FIXTURE, makeAIFixture } from './ai-fixture';
 
 interface ModelManifest {
@@ -20,13 +20,6 @@ interface ModelManifest {
 }
 
 type DetectTextMask = (pixels: Pixels, modelPath: string) => Promise<Uint8Array>;
-type AIAPIContract = Pick<DesktopAPI, 'detectText' | 'cancelTextDetection'>;
-
-const expectedAIAPI: AIAPIContract = {
-  detectText: async (_pixels, _requestId) => ({ ok: false, error: 'fixture-only API contract' }),
-  cancelTextDetection: async (_requestId) => ({ ok: true, value: undefined }),
-};
-
 const root = process.cwd();
 const manifestPath = path.join(root, 'models', 'model.json');
 const compiledDetectorPath = path.join(root, `.ai-integration-${randomUUID()}.cjs`);
@@ -109,6 +102,7 @@ describe('bundled local text detection integration', () => {
     const seam = pixelAt(pixels, AI_FIXTURE.garmentSeam);
     const button = pixelAt(pixels, AI_FIXTURE.garmentButton);
     const stitch = pixelAt(pixels, AI_FIXTURE.garmentStitch);
+    const inFigureRedMark = pixelAt(pixels, AI_FIXTURE.manualFix);
     const cleaned = autoCleanDraft(snapshot, undefined, mask);
 
     expect(pixelAt(cleaned.working, englishPoint!)).toEqual([255, 255, 255, 255]);
@@ -118,14 +112,8 @@ describe('bundled local text detection integration', () => {
     expect(pixelAt(cleaned.working, AI_FIXTURE.garmentSeam)).toEqual(seam);
     expect(pixelAt(cleaned.working, AI_FIXTURE.garmentButton)).toEqual(button);
     expect(pixelAt(cleaned.working, AI_FIXTURE.garmentStitch)).toEqual(stitch);
+    expect(pixelAt(cleaned.working, AI_FIXTURE.manualFix)).toEqual(inFigureRedMark);
     expect(createHash('sha256').update(snapshot.base.data).digest('hex')).toBe(baseHash);
     expect(cleaned.base).toBe(snapshot.base);
   }, 60_000);
-
-  it('keeps the cancellation API bound to a caller-generated job identifier', () => {
-    const requestId = randomUUID();
-    expect(requestId).toMatch(/^[0-9a-f-]{36}$/i);
-    expect(expectedAIAPI.detectText).toBeTypeOf('function');
-    expect(expectedAIAPI.cancelTextDetection).toBeTypeOf('function');
-  });
 });

@@ -147,13 +147,15 @@ kbd { display: inline-block; min-width: 16px; padding: 2px 4px; border: 1px soli
 .drop-overlay { position: absolute; z-index: 4; inset: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 2px dashed #648398; border-radius: 7px; background: rgb(245 249 248 / 94%); color: var(--navy-deep); font-size: 13px; }
 .drop-overlay span { color: #596b72; font-size: 11px; }
 .processing-overlay { position: absolute; z-index: 5; inset: 0; display: grid; place-items: center; background: rgb(238 241 239 / 82%); }
-body.is-processing .tool-rail, body.is-processing .inspector, body.is-processing .top-actions, body.is-processing .canvas-toolbar, body.is-processing .canvas-footer { pointer-events: none; opacity: .66; }
+body.is-processing .tool-rail, body.is-processing .inspector, body.is-processing .top-actions, body.is-processing .project-menu, body.is-processing .canvas-toolbar, body.is-processing .canvas-footer { pointer-events: none; opacity: .66; }
 .processing-card { width: min(300px, 80%); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 21px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); text-align: center; }
 .processing-card strong { font-size: 12px; }
 .spinner { width: 23px; height: 23px; border: 2px solid #dce4e2; border-top-color: var(--navy); border-radius: 50%; animation: spin .8s linear infinite; }
 .progress-track { width: 100%; height: 5px; overflow: hidden; border: 0; border-radius: 4px; background: #e8eeec; appearance: none; }
 .progress-track::-webkit-progress-bar { border-radius: 4px; background: #e8eeec; }
 .progress-track::-webkit-progress-value { border-radius: 4px; background: var(--navy); transition: width .12s linear; }
+.progress-track:indeterminate::-webkit-progress-value { width: 38%; animation: progress-indeterminate 1.35s ease-in-out infinite; }
+@keyframes progress-indeterminate { from { transform: translateX(-105%); } to { transform: translateX(265%); } }
 .canvas-footer { height: 34px; flex: 0 0 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; color: #596b72; font-size: 11px; }
 .canvas-footer p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
 .canvas-footer-right { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }

@@ -48,7 +48,7 @@ it('connects real renderer controls to worker edits, manual request review and P
       pixelJobs.push(message);
       if (message.job.type === 'auto-clean' && holdNextAutoClean) {
         holdNextAutoClean = false;
-        delayedWorker = this;
+        delayedWorker = new Proxy(this, {});
         delayedWorkerRequest = message;
         return;
       }
@@ -75,7 +75,16 @@ it('connects real renderer controls to worker edits, manual request review and P
   const textDetectionCalls: Array<{ requestId: string; pixels: Pixels }> = [];
   const textDetectionCancels: string[] = [];
   const makePhoto = (): Pixels => {
-    const pixels = makePixels([190, 180, 170, 255]);
+    const pixels = makePixels([255, 255, 255, 255]);
+    pixels.data.set([190, 180, 170, 255], 0);
+    pixels.data.set([190, 180, 170, 255], 4);
+    pixels.data.set([190, 180, 170, 255], (8 * pixels.width + 12) * 4);
+    // A small open garment-like outline gives the core cleaner a keep region;
+    // pixel 0 remains an exterior area for the detector-mask integration case.
+    for (let y = 3; y <= 12; y += 1) {
+      for (const x of [8, 15]) pixels.data.set([40, 40, 40, 255], (y * pixels.width + x) * 4);
+    }
+    for (let x = 8; x <= 15; x += 1) pixels.data.set([40, 40, 40, 255], (3 * pixels.width + x) * 4);
     pixels.data[pixels.data.length - 1] = 0;
     importedPhoto = pixels;
     return pixels;
@@ -126,8 +135,6 @@ it('connects real renderer controls to worker edits, manual request review and P
     forkRequest: async () => { if (!project) throw new Error('Missing project'); return ok(browserClone(project)); },
     exportPNG: async (_id, pixels) => { exported = browserClone(pixels); return ok({ path: 'C:\\LocalTest\\result.png', width: pixels.width, height: pixels.height }); },
     openFolder: async () => ok(undefined), openChatGPT: async () => ok(undefined), copyRequest: async () => ok(undefined),
-  };
-  Object.assign(api, {
     detectText: async (pixels: Pixels, requestId: string): Promise<Reply<Uint8Array>> => {
       textDetectionCalls.push({ requestId, pixels: browserClone(pixels) });
       if (holdTextDetection) {
@@ -144,7 +151,7 @@ it('connects real renderer controls to worker edits, manual request review and P
       textDetectionCancels.push(requestId);
       return ok(undefined);
     },
-  });
+  };
   window.desktop = api;
   await import('../src/renderer/main');
   const click = (selector: string) => {
@@ -307,6 +314,7 @@ it('connects real renderer controls to worker edits, manual request review and P
   click('#moreMenuButton'); click('#openProjectButton');
   await vi.waitFor(() => expect(openProjectCalls).toBe(2));
   await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('idle'));
+  expect(document.querySelector('#maskToggleButton')?.getAttribute('aria-pressed')).toBe('false');
   expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(autoCleanCount);
 }, 30_000);
 

@@ -11,6 +11,7 @@ import { decodeImage } from './image';
 import { ProjectStore } from './persistence';
 import { CHATGPT_URL, isTrustedSender, requireId } from './security';
 import { safeErrorMessage, UserError } from './errors';
+import { TextDetectionService } from './ai-manager';
 
 type Source = { name: string; bytes: Uint8Array; path: string | null; pixels: Pixels };
 
@@ -18,6 +19,7 @@ const sources = new Map<string, Source>();
 let mainWindow: BrowserWindow | null = null;
 let projectStore: ProjectStore;
 let rendererEntry = '';
+let textDetection: TextDetectionService;
 
 function isPixels(value: unknown): value is Pixels {
   if (!value || typeof value !== 'object') return false;
@@ -158,6 +160,8 @@ function registerHandlers(): void {
   register('chatgpt:open', async () => {
     await shell.openExternal(CHATGPT_URL);
   });
+  register('ai:detect-text', async (pixels, requestId) => textDetection.detect(pixels as Pixels, requireId(requestId)));
+  register('ai:cancel-text', (requestId) => textDetection.cancel(requireId(requestId)));
 }
 
 function denyNetworkAndPermissions(): void {
@@ -189,7 +193,7 @@ function createWindow(): void {
     if (url !== pathToFileURL(rendererEntry).href) event.preventDefault();
   });
   window.webContents.on('will-redirect', event => event.preventDefault());
-  window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
+  window.on('closed', () => { textDetection.dispose(); if (mainWindow === window) mainWindow = null; });
   void window.loadFile(rendererEntry);
 }
 
@@ -203,6 +207,10 @@ if (squirrelStartup) {
       ? path.join(process.env.LOCALAPPDATA, 'SketchCleaner', 'projects')
       : path.join(app.getPath('userData'), 'projects');
     projectStore = new ProjectStore({ root });
+    textDetection = new TextDetectionService(
+      path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), app.isPackaged ? 'models' : 'artifacts/models', 'text-det.onnx'),
+      path.join(__dirname, 'ai-worker.js'),
+    );
     rendererEntry = path.resolve(app.getAppPath(), 'dist', 'renderer', 'index.html');
     denyNetworkAndPermissions();
     registerHandlers();

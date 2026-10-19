@@ -8,6 +8,7 @@
   "author": "Sketch Cleaner",
   "license": "UNLICENSED",
   "scripts": {
+    "prepare:model": "node scripts/prepare-model.mjs",
     "build": "node scripts/build.mjs",
     "start": "npm run build && electron .",
     "typecheck": "tsc --noEmit",

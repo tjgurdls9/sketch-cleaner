@@ -1,0 +1,9 @@
+{
+  "filename": "text-det.onnx",
+  "upstreamFilename": "ch_PP-OCRv4_det_mobile.onnx",
+  "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx",
+  "sha256": "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+  "upstreamRevision": "v3.10.0",
+  "license": "Apache-2.0",
+  "source": "https://github.com/RapidAI/RapidOCR/blob/v3.10.0/python/rapidocr/default_models.yaml"
+}

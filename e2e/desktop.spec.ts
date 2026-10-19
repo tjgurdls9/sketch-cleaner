@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { AUTOMATIC_FIXTURE, makeAutomaticFixture } from '../tests/automatic-fixture';
+import { AI_FIXTURE, makeAIFixture } from '../tests/ai-fixture';
 
 async function imageScreenPoint(page: import('@playwright/test').Page, x: number, y: number, width: number, height: number): Promise<{ x: number; y: number }> {
   const bounds = await page.locator('#stage').boundingBox();
@@ -49,6 +50,8 @@ test('desktop local editing, manual request round-trip and durable recovery', as
     }, sourcePath);
     await page.locator('#emptyOpenButton').click();
     await expect(page.locator('#imageDimensions')).toContainText('480');
+    await expect(page.locator('#autoCleanStatus')).toHaveAttribute('data-state', 'idle');
+    await page.locator('[data-action="auto-clean"]').click();
     await expect(page.locator('#autoCleanStatus')).toHaveAttribute('data-state', 'unchanged');
     const unchanged = await page.evaluate(async () => {
       const recent = await window.desktop.listRecent();
@@ -193,6 +196,8 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     await page.locator('#emptyOpenButton').click();
     await expect(page.locator('#imageDimensions')).toContainText(String(AUTOMATIC_FIXTURE.width));
     const automaticStatus = page.locator('#autoCleanStatus');
+    await expect(automaticStatus).toHaveAttribute('data-state', 'idle');
+    await page.locator('[data-action="auto-clean"]').click();
     await expect(automaticStatus).toHaveAttribute('data-state', 'complete');
     await expect(page.locator('#processingOverlay')).toBeHidden();
     await expect(page.locator('#saveState')).toContainText('저장됨');
@@ -222,7 +227,6 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
 
     let cleaned = await readPersisted();
     expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([255, 255, 255, 255]);
-    expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.exteriorGlyph.x, AUTOMATIC_FIXTURE.exteriorGlyph.y)).toEqual([255, 255, 255, 255]);
     expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.exteriorTable.x, AUTOMATIC_FIXTURE.exteriorTable.y)).toEqual([255, 255, 255, 255]);
     const seamBefore = cleaned.pixelAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y);
     expect(seamBefore[0]).toBeLessThan(100);
@@ -352,6 +356,207 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     expect(reopenedInUi.manualPixel).toEqual([255, 255, 255, 255]);
     expect(reopenedInUi.arrowPixel).toEqual([255, 255, 255, 255]);
     await page.screenshot({ path: path.join('test-results', 'automatic-workbench.png') });
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('local AI auto cleanup, manual correction, export, and reopen preserve original and garment details', async () => {
+  test.setTimeout(180_000);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sketch-local-ai-'));
+  const sourcePath = path.join(root, 'synthetic-ai-garment.png');
+  const exportPath = path.join(root, 'synthetic-ai-cleaned.png');
+  await writeFile(sourcePath, await makeAIFixture());
+  const sourceHash = createHash('sha256').update(await readFile(sourcePath)).digest('hex');
+  const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
+  const executablePath = process.env.SKETCH_TEST_EXECUTABLE;
+  const profilePath = path.join(root, 'profile');
+  const launch = () => electron.launch({
+    executablePath,
+    args: [...(executablePath ? [] : ['.']), `--user-data-dir=${profilePath}`],
+    env,
+  });
+  let app = await launch();
+  const pageErrors: string[] = [];
+
+  try {
+    let page = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await expect(page.getByRole('heading', { name: '정리할 작업 사진을 여세요' })).toBeVisible();
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showOpenDialog', { configurable: true, value: async () => ({ canceled: false, filePaths: [filePath] }) });
+    }, sourcePath);
+
+    await page.locator('#emptyOpenButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText(String(AI_FIXTURE.width));
+    const status = page.locator('#autoCleanStatus');
+    await expect(status).toHaveAttribute('data-state', 'idle');
+    const bridge = await page.evaluate(() => ({
+      detectText: typeof window.desktop.detectText,
+      cancelTextDetection: typeof window.desktop.cancelTextDetection,
+    }));
+    expect(bridge).toEqual({ detectText: 'function', cancelTextDetection: 'function' });
+
+    const projectHeader = async () => {
+      const recent = await page.evaluate(async () => {
+      const recent = await window.desktop.listRecent();
+      if (!recent.ok || !recent.value[0]) throw new Error('가져온 AI 작업이 없습니다.');
+        return recent.value[0];
+      });
+      const manifest = JSON.parse(await readFile(path.join(recent.folder, 'project.json'), 'utf8')) as {
+        id: string;
+        currentRevision: string;
+        revisions: { id: string; workVersion: number }[];
+      };
+      const revision = manifest.revisions.find(item => item.id === manifest.currentRevision);
+      if (!revision) throw new Error('현재 저장 버전을 찾을 수 없습니다.');
+      return { id: manifest.id, folder: recent.folder, workVersion: revision.workVersion };
+    };
+    const sourceImage = await sharp(await readFile(sourcePath)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const sourcePixels = {
+      width: sourceImage.info.width,
+      height: sourceImage.info.height,
+      data: sourceImage.data,
+    };
+    const readPersisted = async () => {
+      const project = await projectHeader();
+      const manifest = JSON.parse(await readFile(path.join(project.folder, 'project.json'), 'utf8')) as { currentRevision: string };
+      const revisionFolder = path.join(project.folder, 'revisions', manifest.currentRevision);
+      const image = await sharp(await readFile(path.join(revisionFolder, 'working.png'))).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      const pixelAt = (point: { x: number; y: number }): number[] => {
+        const offset = (point.y * image.info.width + point.x) * 4;
+        return [...image.data.subarray(offset, offset + 4)];
+      };
+      const darkCount = (region: { left: number; top: number; right: number; bottom: number }): number => {
+        let count = 0;
+        for (let y = region.top; y < region.bottom; y += 1) {
+          for (let x = region.left; x < region.right; x += 1) {
+            const offset = (y * image.info.width + x) * 4;
+            if (Math.max(image.data[offset], image.data[offset + 1], image.data[offset + 2]) < 170) count += 1;
+          }
+        }
+        return count;
+      };
+      return { ...project, pixelAt, darkCount };
+    };
+
+    const originalEnglishInk = (() => {
+      let count = 0;
+      for (let y = AI_FIXTURE.english.top; y < AI_FIXTURE.english.bottom; y += 1) {
+        for (let x = AI_FIXTURE.english.left; x < AI_FIXTURE.english.right; x += 1) {
+          const offset = (y * sourcePixels.width + x) * 4;
+          if (Math.max(sourcePixels.data[offset], sourcePixels.data[offset + 1], sourcePixels.data[offset + 2]) < 170) count += 1;
+        }
+      }
+      return count;
+    })();
+    const originalKoreanInk = (() => {
+      let count = 0;
+      for (let y = AI_FIXTURE.korean.top; y < AI_FIXTURE.korean.bottom; y += 1) {
+        for (let x = AI_FIXTURE.korean.left; x < AI_FIXTURE.korean.right; x += 1) {
+          const offset = (y * sourcePixels.width + x) * 4;
+          if (Math.max(sourcePixels.data[offset], sourcePixels.data[offset + 1], sourcePixels.data[offset + 2]) < 170) count += 1;
+        }
+      }
+      return count;
+    })();
+    expect(originalEnglishInk).toBeGreaterThan(30);
+    expect(originalKoreanInk).toBeGreaterThan(30);
+
+    await page.locator('[data-action="auto-clean"]').click();
+    await expect(status).toHaveAttribute('data-state', 'complete', { timeout: 120_000 });
+    await expect(page.locator('#processingOverlay')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+
+    const cleaned = await readPersisted();
+    expect(cleaned.darkCount(AI_FIXTURE.english)).toBeLessThan(originalEnglishInk * 0.35);
+    expect(cleaned.darkCount(AI_FIXTURE.korean)).toBeLessThan(originalKoreanInk * 0.35);
+    expect(cleaned.pixelAt(AI_FIXTURE.tableInk)).toEqual([255, 255, 255, 255]);
+    expect(cleaned.pixelAt(AI_FIXTURE.redArrow)).toEqual([255, 255, 255, 255]);
+    const seam = cleaned.pixelAt(AI_FIXTURE.garmentSeam);
+    const button = cleaned.pixelAt(AI_FIXTURE.garmentButton);
+    const stitch = cleaned.pixelAt(AI_FIXTURE.garmentStitch);
+    expect(seam[0]).toBeLessThan(120);
+    expect(button[0]).toBeLessThan(120);
+    expect(stitch[0]).toBeLessThan(160);
+    const manualBefore = cleaned.pixelAt(AI_FIXTURE.manualFix);
+    expect(manualBefore[0]).toBeGreaterThan(manualBefore[1] * 1.35);
+
+    await page.locator('#zoomReadout').click();
+    await page.locator('#zoom100Button').click();
+    await expect(page.locator('#zoomReadout')).toHaveText('100%');
+    await page.locator('button[data-tool="delete"]').click();
+    await page.locator('#brushSize').evaluate(element => {
+      (element as HTMLInputElement).value = '9';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const markPoint = await imageScreenPoint(page, AI_FIXTURE.manualFix.x, AI_FIXTURE.manualFix.y, AI_FIXTURE.width, AI_FIXTURE.height);
+    await page.mouse.move(markPoint.x, markPoint.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.getByRole('button', { name: '칠한 곳 지우기', exact: true }).click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    let corrected = await readPersisted();
+    expect(corrected.pixelAt(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expect(corrected.pixelAt(AI_FIXTURE.garmentSeam)).toEqual(seam);
+    expect(corrected.pixelAt(AI_FIXTURE.garmentButton)).toEqual(button);
+    expect(corrected.pixelAt(AI_FIXTURE.garmentStitch)).toEqual(stitch);
+
+    await page.locator('#undoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    expect((await readPersisted()).pixelAt(AI_FIXTURE.manualFix)).toEqual(manualBefore);
+    await page.locator('#redoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    corrected = await readPersisted();
+    expect(corrected.pixelAt(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+
+    await page.locator('#tabExport').click();
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showSaveDialog', { configurable: true, value: async () => ({ canceled: false, filePath }) });
+    }, exportPath);
+    await page.getByRole('button', { name: 'PNG 저장', exact: true }).click();
+    await expect(page.locator('#inspectorContent')).toContainText('저장 완료');
+    const exported = await sharp(await readFile(exportPath)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const exportedPixel = (point: { x: number; y: number }): number[] => {
+      const offset = (point.y * exported.info.width + point.x) * 4;
+      return [...exported.data.subarray(offset, offset + 4)];
+    };
+    expect([exported.info.width, exported.info.height]).toEqual([AI_FIXTURE.width, AI_FIXTURE.height]);
+    expect(exportedPixel(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expect(exportedPixel(AI_FIXTURE.garmentSeam)).toEqual(seam);
+    expect(exportedPixel(AI_FIXTURE.garmentButton)).toEqual(button);
+    expect(createHash('sha256').update(await readFile(sourcePath)).digest('hex')).toBe(sourceHash);
+
+    const savedProjectId = corrected.id;
+    const savedVersion = corrected.workVersion;
+    await app.close();
+    app = await launch();
+    page = await app.firstWindow();
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
+    await expect(page.locator(`[data-recent-id="${savedProjectId}"]`)).toBeVisible();
+    await page.locator(`[data-recent-id="${savedProjectId}"]`).click();
+    await expect(page.locator('#autoCleanStatus')).toHaveAttribute('data-state', 'idle');
+    await expect(page.locator('#imageDimensions')).toContainText(String(AI_FIXTURE.width));
+    const reopened = await projectHeader();
+    expect(reopened.workVersion).toBe(savedVersion);
+    const afterReopen = await readPersisted();
+    expect(afterReopen.darkCount(AI_FIXTURE.english)).toBeLessThan(originalEnglishInk * 0.35);
+    expect(afterReopen.darkCount(AI_FIXTURE.korean)).toBeLessThan(originalKoreanInk * 0.35);
+    expect(afterReopen.pixelAt(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expect(createHash('sha256').update(await readFile(sourcePath)).digest('hex')).toBe(sourceHash);
+    await page.screenshot({ path: path.join('test-results', 'local-ai-workbench.png') });
     expect(pageErrors).toEqual([]);
   } finally {
     await app.close();

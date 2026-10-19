@@ -40,5 +40,7 @@ export interface DesktopAPI {
   openFolder(id: string, requestId?: string): Promise<Reply<void>>;
   openChatGPT(): Promise<Reply<void>>;
   copyRequest(id: string, requestId: string): Promise<Reply<void>>;
+  detectText(pixels: Pixels, requestId: string): Promise<Reply<Uint8Array>>;
+  cancelTextDetection(requestId: string): Promise<Reply<void>>;
 }
 declare global { interface Window { desktop: DesktopAPI } }

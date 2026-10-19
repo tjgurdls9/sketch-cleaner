@@ -22,7 +22,7 @@ export type PixelJob =
   | { type: 'crop'; snapshot: Snapshot; rect: Rect }
   | { type: 'fill'; snapshot: Snapshot; fill: Fill }
   | { type: 'adjust'; snapshot: Snapshot; adjustment: Tone }
-  | { type: 'auto-clean'; snapshot: Snapshot };
+  | { type: 'auto-clean'; snapshot: Snapshot; textMask?: Uint8Array };
 
 export interface History {
   past: Snapshot[];
@@ -41,7 +41,7 @@ const pixelCount = (width: number, height: number): number => {
   return count;
 };
 
-function validatePixels(value: Pixels, label = 'pixels'): void {
+export function validatePixels(value: Pixels, label = 'pixels'): void {
   if (!value || typeof value !== 'object') throw new TypeError(`Invalid ${label}`);
   const count = pixelCount(value.width, value.height);
   if (!(value.data instanceof Uint8ClampedArray) || value.data.length !== count * 4) throw new RangeError(`Invalid ${label} buffer`);
@@ -631,7 +631,7 @@ export function runPixelJob(job: PixelJob, progress?: PixelProgress): Pixels | S
     case 'adjust': return adjustSelection(job.snapshot, job.adjustment, progress);
     case 'auto-clean':
       validateSnapshot(job.snapshot);
-      return autoCleanDraft(job.snapshot, progress);
+      return autoCleanDraft(job.snapshot, progress, job.textMask);
     default: throw new TypeError('Unsupported pixel job');
   }
 }

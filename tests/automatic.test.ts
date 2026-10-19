@@ -130,6 +130,21 @@ describe('automatic cleanup draft', () => {
     expect(snapshot.workVersion).toBe(0);
   });
 
+  it('preserves working pixels when the model mask and confident supplemental regions are empty', () => {
+    const imported = canvas(120, 100);
+    shirt(imported, 42);
+    put(imported, 8, 12, [24, 74, 168, 255]);
+    const snapshot = createSnapshot(imported, 'base-empty-model-mask');
+    snapshot.deleteMask[12 * 120 + 8] = 255;
+    snapshot.working.data.set([40, 50, 60, 255], (12 * 120 + 8) * 4);
+    const before = snapshot.working.data.slice();
+
+    const result = autoCleanDraft(snapshot, undefined, new Uint8Array(120 * 100));
+
+    expect(result).toBe(snapshot);
+    expect(snapshot.working.data).toEqual(before);
+  });
+
   it('keeps two garment figures and disconnected interior details while removing exterior text, table, red ink, and paper shadow', () => {
     const imported = garmentPage();
     const snapshot = createSnapshot(imported, 'base-auto');

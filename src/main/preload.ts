@@ -23,6 +23,8 @@ const api: DesktopAPI = Object.freeze({
   openFolder: (id: string, requestId?: string) => call<void>('folder:open', id, requestId),
   openChatGPT: () => call<void>('chatgpt:open'),
   copyRequest: (id: string, requestId: string) => call<void>('request:copy', id, requestId),
+  detectText: (pixels: Pixels, requestId: string) => call<Uint8Array>('ai:detect-text', pixels, requestId),
+  cancelTextDetection: (requestId: string) => call<void>('ai:cancel-text', requestId),
 });
 
 contextBridge.exposeInMainWorld('desktop', api);
