@@ -106,6 +106,11 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   key('z', { metaKey: true, shiftKey: true });
   await waitSaved(12, 8, WHITE);
 
+  // A focused slider must not swallow tool letters (focus stays there after dragging it).
+  size.focus();
+  size.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true, cancelable: true }));
+  expect(document.querySelector('button[data-tool="marquee"]')?.getAttribute('aria-pressed')).toBe('true');
+
   // M: drag a rectangle, Delete fills it white; ⌘D clears the selection so Delete does nothing.
   key('m');
   drag([2, 2], [6, 6]);
