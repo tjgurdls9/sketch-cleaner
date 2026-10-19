@@ -43,6 +43,15 @@
         <aside class="tool-rail" aria-label="편집 도구">
           <section class="rail-section">
             <div class="section-heading"><h2>작업 영역</h2><span class="section-mark">A</span></div>
+            <button class="rail-button" type="button" data-tool="erase" aria-pressed="false" aria-keyshortcuts="E">
+              <span class="tool-icon erase-icon" aria-hidden="true">◌</span><span>지우개</span><kbd class="tool-key">E</kbd>
+            </button>
+            <button class="rail-button" type="button" data-tool="marquee" aria-pressed="false" aria-keyshortcuts="M">
+              <span class="tool-icon lasso-icon" aria-hidden="true">⬚</span><span>사각 선택</span><kbd class="tool-key">M</kbd>
+            </button>
+            <button class="rail-button" type="button" data-tool="pen" aria-pressed="false" aria-keyshortcuts="P">
+              <span class="tool-icon lasso-icon" aria-hidden="true">✒</span><span>펜 선택</span><kbd class="tool-key">P</kbd>
+            </button>
             <button class="rail-button active" type="button" data-tool="delete" aria-pressed="true">
               <span class="tool-icon delete-icon" aria-hidden="true">−</span><span>삭제 표시</span>
             </button>
@@ -55,8 +64,8 @@
             <button class="rail-button" type="button" data-tool="restore" aria-pressed="false">
               <span class="tool-icon restore-icon" aria-hidden="true">↺</span><span>기준 복원</span>
             </button>
-            <button class="rail-button" type="button" data-tool="lasso" aria-pressed="false">
-              <span class="tool-icon lasso-icon" aria-hidden="true">⌁</span><span>올가미 선택</span>
+            <button class="rail-button" type="button" data-tool="lasso" aria-pressed="false" aria-keyshortcuts="L">
+              <span class="tool-icon lasso-icon" aria-hidden="true">⌁</span><span>올가미 선택</span><kbd class="tool-key">L</kbd>
             </button>
             <button class="rail-button" type="button" data-tool="pan" aria-pressed="false">
               <span class="tool-icon pan-icon" aria-hidden="true">✥</span><span>화면 이동</span>

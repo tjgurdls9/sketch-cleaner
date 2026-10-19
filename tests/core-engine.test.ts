@@ -8,13 +8,16 @@ import {
   createSnapshot,
   commitHistory,
   cropBasis,
+  eraseStroke,
   fillSelection,
   historySnapshot,
   imageToView,
+  marqueeRect,
   paintStroke,
   redoHistory,
   restoreStroke,
   runPixelJob,
+  rectPolygon,
   rotateBasis,
   selectLasso,
   undoHistory,
@@ -252,6 +255,7 @@ describe('pixel worker jobs', () => {
       { type: 'candidate', snapshot: state, candidate: pixels(3, 2), transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } },
       { type: 'stroke', snapshot: state, points: [{ x: 1.5, y: 0.5 }], brush, tool: 'delete' },
       { type: 'restore', snapshot: state, points: [{ x: 1.5, y: 0.5 }], brush },
+      { type: 'erase', snapshot: state, points: [{ x: 1.5, y: 0.5 }], brush, fill: { kind: 'white' } },
       { type: 'lasso', snapshot: state, polygon: [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 2 }], mode: 'inside' },
       { type: 'rotate', snapshot: state, degrees: 90 },
       { type: 'crop', snapshot: state, rect: { x: 0, y: 0, width: 2, height: 2 } },
@@ -306,5 +310,67 @@ describe('pixel worker jobs', () => {
       if (previousSelf) Object.defineProperty(globalThis, 'self', previousSelf);
       else Reflect.deleteProperty(globalThis, 'self');
     }
+  });
+});
+
+describe('instant photoshop-style edits', () => {
+  it('erases one stroke to white inside its bounds with a single version bump', () => {
+    const start = snapshot(9, 9);
+    const next = eraseStroke(start, [{ x: 4.5, y: 4.5 }], { radius: 1.5, strength: 1, hardness: 1 }, { kind: 'white' });
+    expect(at(next.working, 4, 4)).toEqual([255, 255, 255, 255]);
+    expect(at(next.working, 0, 0)).toEqual([0, 0, 0, 255]);
+    expect(at(next.working, 8, 8)).toEqual([0, 0, 0, 255]);
+    expect(next.workVersion).toBe(start.workVersion + 1);
+    expect(at(start.working, 4, 4)).toEqual([0, 0, 0, 255]);
+    expect(next.deleteMask).toBe(start.deleteMask);
+  });
+
+  it('never erases fully protected pixels and scales partly protected ones', () => {
+    const start = snapshot(3, 1);
+    start.protectMask[0] = 255;
+    start.protectMask[1] = 128;
+    const next = eraseStroke(start, [{ x: 0.5, y: 0.5 }, { x: 2.5, y: 0.5 }], { radius: 2, strength: 1, hardness: 1 }, { kind: 'white' });
+    expect(at(next.working, 0, 0)).toEqual([0, 0, 0, 255]);
+    const partial = at(next.working, 1, 0)[0];
+    expect(partial).toBeGreaterThan(100);
+    expect(partial).toBeLessThan(155);
+    expect(at(next.working, 2, 0)).toEqual([255, 255, 255, 255]);
+  });
+
+  it('erases with the sampled paper color and returns the same snapshot when nothing changes', () => {
+    const start = snapshot(4, 1);
+    start.working.data.set([200, 190, 180, 255], 3 * 4);
+    const next = eraseStroke(start, [{ x: 0.5, y: 0.5 }], { radius: 1, strength: 1, hardness: 1 }, { kind: 'sample', point: { x: 3.5, y: 0.5 } });
+    expect(at(next.working, 0, 0)).toEqual([200, 190, 180, 255]);
+    expect(eraseStroke(start, [{ x: 0.5, y: 0.5 }], { radius: 1, strength: 0, hardness: 1 }, { kind: 'white' })).toBe(start);
+    const white = createSnapshot(pixels(2, 1, [255, 255, 255, 255]), 'base-white');
+    expect(eraseStroke(white, [{ x: 0.5, y: 0.5 }], brush, { kind: 'white' })).toBe(white);
+    expect(() => eraseStroke(start, [{ x: 0.5, y: 0.5 }], brush, { kind: 'sample', point: { x: 9, y: 0 } })).toThrow(RangeError);
+    expect(() => eraseStroke(start, [{ x: 0.5, y: 0.5 }], brush, { kind: 'paint' } as never)).toThrow(TypeError);
+  });
+
+  it('builds marquee rectangles from any drag direction with square and from-center modifiers', () => {
+    expect(marqueeRect({ x: 8, y: 6 }, { x: 2, y: 1 })).toEqual({ x: 2, y: 1, width: 6, height: 5 });
+    expect(marqueeRect({ x: 2, y: 2 }, { x: 8, y: 4 }, { square: true })).toEqual({ x: 2, y: 2, width: 6, height: 6 });
+    expect(marqueeRect({ x: 2, y: 2 }, { x: 0, y: 6 }, { square: true })).toEqual({ x: -2, y: 2, width: 4, height: 4 });
+    expect(marqueeRect({ x: 5, y: 5 }, { x: 7, y: 6 }, { fromCenter: true })).toEqual({ x: 3, y: 4, width: 4, height: 2 });
+    expect(marqueeRect({ x: 5, y: 5 }, { x: 7, y: 6 }, { square: true, fromCenter: true })).toEqual({ x: 3, y: 3, width: 4, height: 4 });
+  });
+
+  it('selects a marquee rectangle and fills only that rectangle white', () => {
+    const start = snapshot(6, 4);
+    const selected = selectLasso(start, rectPolygon({ x: 1, y: 1, width: 3, height: 2 }), 'inside');
+    const filled = fillSelection(selected, { kind: 'white' });
+    expect(at(filled.working, 1, 1)).toEqual([255, 255, 255, 255]);
+    expect(at(filled.working, 3, 2)).toEqual([255, 255, 255, 255]);
+    expect(at(filled.working, 4, 1)).toEqual([0, 0, 0, 255]);
+    expect(at(filled.working, 1, 3)).toEqual([0, 0, 0, 255]);
+  });
+
+  it('runs an erase job through the worker dispatcher', () => {
+    const value = runPixelJob({ type: 'erase', snapshot: snapshot(3, 1), points: [{ x: 1.5, y: 0.5 }], brush: { radius: 0.5, strength: 1, hardness: 1 }, fill: { kind: 'white' } });
+    if (!('working' in value)) throw new Error('Expected a snapshot');
+    expect(at(value.working, 1, 0)).toEqual([255, 255, 255, 255]);
+    expect(at(value.working, 0, 0)).toEqual([0, 0, 0, 255]);
   });
 });

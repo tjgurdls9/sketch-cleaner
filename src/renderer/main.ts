@@ -1,9 +1,9 @@
 import './styles.css';
 import {
   createHistory, createSnapshot, historySnapshot, redoHistory, undoHistory, viewToImage,
-  commitHistory,
+  commitHistory, eraseStroke, fillSelection, marqueeRect, rectPolygon, selectLasso,
 } from '../core/engine';
-import type { Affine, Brush, History, PixelJob, Point, Rect, ViewTransform } from '../core/engine';
+import type { Affine, Brush, Fill, History, PixelJob, Point, Rect, ViewTransform } from '../core/engine';
 import type {
   Candidate, ExportResult, ImportedImage, Pixels, Project, RecentProject,
   Reply, RequestBundle, RequestInfo, Snapshot,
@@ -12,7 +12,14 @@ import { MAX_FILE_BYTES, MAX_PIXELS } from '../shared/types';
 import type { PixelJobRequest, PixelJobResponse } from '../core/worker-protocol';
 import { candidateReadiness, fitCandidateTransform } from './state';
 
-type Tool = 'delete' | 'protect' | 'unselect' | 'restore' | 'lasso' | 'pan' | 'crop' | 'sample';
+type Tool = 'erase' | 'marquee' | 'pen' | 'delete' | 'protect' | 'unselect' | 'restore' | 'lasso' | 'pan' | 'crop' | 'sample';
+
+const BRUSH_TOOLS: readonly Tool[] = ['erase', 'delete', 'protect', 'unselect', 'restore'];
+const SELECTION_TOOLS: readonly Tool[] = ['marquee', 'pen', 'lasso'];
+const TOOL_KEYS: Readonly<Record<string, Tool>> = { e: 'erase', m: 'marquee', p: 'pen', l: 'lasso' };
+const PEN_CLOSE_DISTANCE = 8;
+const BRUSH_SIZE_MIN = 2;
+const BRUSH_SIZE_MAX = 220;
 type Panel = 'edit' | 'request' | 'review' | 'export';
 type CompareMode = 'side' | 'overlay';
 type AutoCleanStatus = 'idle' | 'running' | 'complete' | 'unchanged' | 'cancelled' | 'failed';
@@ -90,8 +97,10 @@ let blockedControls: Array<{ element: HTMLButtonElement | HTMLInputElement | HTM
 let requestLoadRevision = 0;
 let openProjectRevision = 0;
 let draftPoints: Point[] = [];
-let draftKind: 'brush' | 'lasso' | 'crop' | null = null;
-let gesture: 'draw' | 'lasso' | 'crop' | 'pan' | 'candidate' | null = null;
+let draftKind: 'brush' | 'lasso' | 'crop' | 'marquee' | 'pen' | null = null;
+let gesture: 'draw' | 'lasso' | 'crop' | 'marquee' | 'pan' | 'candidate' | null = null;
+let penHover: Point | null = null;
+let marqueeModifiers = { square: false, fromCenter: false };
 let lastGesturePoint: Point | null = null;
 let gestureStart: Point | null = null;
 let gestureViewStart: { x: number; y: number; panX: number; panY: number } | null = null;
@@ -684,10 +693,12 @@ function renderDraft(context: CanvasRenderingContext2D, pixelRatio: number): voi
   context.save();
   context.setTransform(pixelRatio * zoom, 0, 0, pixelRatio * zoom, pixelRatio * panX, pixelRatio * panY);
   if (draftKind === 'brush') {
-    const color = state.tool === 'protect' ? '#477fa2' : state.tool === 'restore' ? '#688178' : '#cc6254';
+    const paper = state.sampledPoint && state.sampledColor ? `rgb(${state.sampledColor.join(', ')})` : '#ffffff';
+    const color = state.tool === 'erase' ? paper : state.tool === 'protect' ? '#477fa2' : state.tool === 'restore' ? '#688178' : '#cc6254';
     context.strokeStyle = color;
     context.fillStyle = color;
-    context.globalAlpha = Math.max(0.18, state.brushStrength / 100 * 0.45);
+    // The eraser preview is the result itself, so it is drawn at the stroke's real strength.
+    context.globalAlpha = state.tool === 'erase' ? state.brushStrength / 100 : Math.max(0.18, state.brushStrength / 100 * 0.45);
     context.lineWidth = Math.max(1 / zoom, state.brushSize * 2);
     context.lineCap = 'round';
     context.lineJoin = 'round';
@@ -711,6 +722,28 @@ function renderDraft(context: CanvasRenderingContext2D, pixelRatio: number): voi
     context.closePath();
     context.fill();
     context.stroke();
+  } else if (draftKind === 'marquee' && draftPoints.length > 1) {
+    const { x, y, width, height } = marqueeRect(draftPoints[0], draftPoints.at(-1)!, marqueeModifiers);
+    context.fillStyle = 'rgb(204 98 84 / 14%)';
+    context.fillRect(x, y, width, height);
+    context.strokeStyle = '#31566b';
+    context.lineWidth = 1.5 / zoom;
+    context.setLineDash([5 / zoom, 3 / zoom]);
+    context.strokeRect(x, y, width, height);
+  } else if (draftKind === 'pen') {
+    context.strokeStyle = '#31566b';
+    context.fillStyle = '#ffffff';
+    context.lineWidth = 1.5 / zoom;
+    context.beginPath();
+    context.moveTo(draftPoints[0].x, draftPoints[0].y);
+    for (const point of draftPoints.slice(1)) context.lineTo(point.x, point.y);
+    if (penHover) context.lineTo(penHover.x, penHover.y);
+    context.stroke();
+    const handle = 6 / zoom;
+    for (const point of draftPoints) {
+      context.fillRect(point.x - handle / 2, point.y - handle / 2, handle, handle);
+      context.strokeRect(point.x - handle / 2, point.y - handle / 2, handle, handle);
+    }
   } else if (draftKind === 'crop' && draftPoints.length > 1) {
     const [start, end] = [draftPoints[0], draftPoints.at(-1)!];
     const left = Math.min(start.x, end.x);
@@ -756,6 +789,7 @@ function brush(): Brush {
 function endDraft(): void {
   draftKind = null;
   draftPoints = [];
+  penHover = null;
   if (overlayCanvas.width) overlayCanvas.getContext('2d')?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 }
 
@@ -781,18 +815,88 @@ function paintColorSwatch(canvas: HTMLCanvasElement, color: [number, number, num
   context.fillRect(0, 0, canvas.width, canvas.height);
 }
 
-async function finishLasso(): Promise<void> {
+function eraserFill(): Fill {
+  return state.sampledPoint ? { kind: 'sample', point: state.sampledPoint } : { kind: 'white' };
+}
+
+/** Photoshop-style edits run on the main thread: a worker would clone the whole snapshot both ways. */
+function applyNow(edit: (snapshot: Snapshot) => Snapshot, failure: string): void {
   const snapshot = state.snapshot;
-  if (!snapshot || draftPoints.length < 3) { endDraft(); renderCanvas(); return; }
-  const token = captureEditToken(snapshot);
+  if (!snapshot || document.body.classList.contains('is-processing')) return;
+  try {
+    commitFromEngine(edit(snapshot));
+  } catch (error) {
+    showError(safeTextError(error, failure));
+  }
+}
+
+function finishMarquee(): void {
+  const [start, end] = [draftPoints[0], draftPoints.at(-1)];
+  endDraft();
+  if (!start || !end) return;
+  const rect = marqueeRect(start, end, marqueeModifiers);
+  // A plain click without a drag deselects, as in Photoshop.
+  if (rect.width < 1 || rect.height < 1) { deselect(); return; }
+  applyNow(snapshot => selectLasso(snapshot, rectPolygon(rect), 'inside'), '사각 선택을 만들지 못했습니다.');
+}
+
+function finishPen(): void {
   const polygon = draftPoints;
   endDraft();
-  try {
-    const next = await runPixelJob({ type: 'lasso', snapshot, polygon, mode: state.lassoMode }, '올가미 선택 범위를 계산하고 있습니다') as Snapshot;
-    commitWorkerSnapshot(next, token);
-  } catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError')) showError(safeTextError(error, '올가미 선택을 만들지 못했습니다.'));
+  if (polygon.length < 3) { renderCanvas(); return; }
+  applyNow(snapshot => selectLasso(snapshot, polygon, 'inside'), '펜 선택을 만들지 못했습니다.');
+}
+
+function addPenPoint(point: Point): void {
+  const first = draftPoints[0];
+  if (draftKind === 'pen' && first && draftPoints.length >= 3
+    && Math.hypot(point.x - first.x, point.y - first.y) * state.view.zoom <= PEN_CLOSE_DISTANCE) {
+    finishPen();
+    return;
   }
+  if (draftKind !== 'pen') { draftKind = 'pen'; draftPoints = []; }
+  draftPoints = [...draftPoints, point];
+}
+
+function deselect(): void {
+  applyNow(snapshot => {
+    const { width, height } = snapshot.working;
+    return selectLasso(snapshot, rectPolygon({ x: 0, y: 0, width, height }), 'outside');
+  }, '선택을 해제하지 못했습니다.');
+}
+
+function deleteSelection(): void {
+  if (state.panel !== 'edit') return;
+  applyNow(snapshot => fillSelection(snapshot, { kind: 'white' }), '선택 영역을 지우지 못했습니다.');
+}
+
+function stepBrushSize(direction: 1 | -1): void {
+  const size = state.brushSize;
+  const step = size <= 10 ? 1 : size <= 50 ? 5 : 10;
+  const input = $('#brushSize') as HTMLInputElement;
+  input.value = String(Math.max(BRUSH_SIZE_MIN, Math.min(BRUSH_SIZE_MAX, size + direction * step)));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/** Returns true when the key was a pen-path key and has been handled. */
+function penKey(key: string): boolean {
+  if (draftKind !== 'pen') return false;
+  if (key === 'enter') finishPen();
+  else if (key === 'escape') { endDraft(); renderCanvas(); }
+  else if (key === 'backspace') {
+    draftPoints = draftPoints.slice(0, -1);
+    if (!draftPoints.length) endDraft();
+    renderDraft(overlayCanvas.getContext('2d')!, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+  } else if (key === 'delete') { /* Photoshop ignores Delete while a path is open. */ }
+  else return false;
+  return true;
+}
+
+function finishLasso(): void {
+  const polygon = draftPoints;
+  endDraft();
+  if (polygon.length < 3) { renderCanvas(); return; }
+  applyNow(snapshot => selectLasso(snapshot, polygon, state.lassoMode), '올가미 선택을 만들지 못했습니다.');
 }
 
 async function finishStroke(snapshot: Snapshot, points: Point[], tool: Tool): Promise<void> {
@@ -828,11 +932,21 @@ function pointerDown(event: PointerEvent): void {
     gesture = 'crop';
     draftKind = 'crop';
     draftPoints = [imagePoint(screen)];
+  } else if (state.panel === 'edit' && state.tool === 'pen') {
+    addPenPoint(imagePoint(screen));
+    event.preventDefault();
+    renderDraft(overlayCanvas.getContext('2d')!, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+    return;
+  } else if (state.panel === 'edit' && state.tool === 'marquee') {
+    gesture = 'marquee';
+    draftKind = 'marquee';
+    draftPoints = [imagePoint(screen)];
+    marqueeModifiers = { square: event.shiftKey, fromCenter: event.altKey };
   } else if (state.panel === 'edit' && state.tool === 'lasso') {
     gesture = 'lasso';
     draftKind = 'lasso';
     draftPoints = [imagePoint(screen)];
-  } else if (state.panel === 'edit' && ['delete', 'protect', 'unselect', 'restore'].includes(state.tool)) {
+  } else if (state.panel === 'edit' && BRUSH_TOOLS.includes(state.tool)) {
     gesture = 'draw';
     draftKind = 'brush';
     draftPoints = [imagePoint(screen)];
@@ -868,7 +982,13 @@ function pointerMove(event: PointerEvent): void {
     if (y) y.value = String(Math.round(state.candidateY));
     return;
   }
-  if ((gesture === 'draw' || gesture === 'lasso' || gesture === 'crop') && draftPoints.length) {
+  if (!gesture && draftKind === 'pen') {
+    penHover = imagePoint(screen);
+    renderDraft(overlayCanvas.getContext('2d')!, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+    return;
+  }
+  if (gesture === 'marquee') marqueeModifiers = { square: event.shiftKey, fromCenter: event.altKey };
+  if ((gesture === 'draw' || gesture === 'lasso' || gesture === 'crop' || gesture === 'marquee') && draftPoints.length) {
     const point = imagePoint(screen);
     const previous = draftPoints[draftPoints.length - 1];
     if (Math.hypot(point.x - previous.x, point.y - previous.y) >= 0.6) draftPoints.push(point);
@@ -903,13 +1023,15 @@ function pointerUp(event: PointerEvent): void {
     renderCanvas();
     return;
   }
-  if (completed === 'lasso') { void finishLasso(); return; }
+  if (completed === 'lasso') { finishLasso(); return; }
+  if (completed === 'marquee') { finishMarquee(); return; }
   if (completed === 'draw' && state.snapshot) {
     const snapshot = state.snapshot;
     const points = draftPoints;
     const tool = state.tool;
     endDraft();
-    void finishStroke(snapshot, points, tool);
+    if (tool === 'erase') applyNow(current => eraseStroke(current, points, brush(), eraserFill()), '지우개를 적용하지 못했습니다.');
+    else void finishStroke(snapshot, points, tool);
   }
 }
 
@@ -1164,8 +1286,9 @@ async function rotate(degrees: number): Promise<void> {
 }
 
 function setTool(tool: Tool): void {
+  if (tool !== 'pen' && draftKind === 'pen') endDraft();
   state.tool = tool;
-  if (['delete', 'protect', 'unselect', 'restore', 'lasso'].includes(tool)) {
+  if ([...BRUSH_TOOLS, ...SELECTION_TOOLS].includes(tool)) {
     state.showMasks = true;
     syncMaskToggle();
   }
@@ -1174,14 +1297,17 @@ function setTool(tool: Tool): void {
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
   });
-  $('#brushControls').toggleAttribute('hidden', !['delete', 'protect', 'unselect', 'restore'].includes(tool));
+  $('#brushControls').toggleAttribute('hidden', !BRUSH_TOOLS.includes(tool));
   $('#lassoControls').toggleAttribute('hidden', tool !== 'lasso');
   const hints: Record<Tool, string> = {
+    erase: '드래그하는 곳을 바로 지웁니다. 파랑 보호 영역은 지워지지 않습니다. [ ]로 크기 조절.',
+    marquee: '드래그해 사각형으로 선택하고 Delete로 지우세요. Shift 정사각형, Alt 중심 기준.',
+    pen: '점을 찍어 직선으로 두르고 첫 점이나 Enter로 닫으세요. Backspace 한 점 취소, Esc 취소.',
     delete: '바꿔도 되는 영역을 드래그해 표시하세요.',
     protect: '남길 선과 부분을 드래그해 보호하세요.',
     unselect: '사진은 지우지 않고 표시만 지웁니다.',
     restore: '현재 작업 기준 픽셀을 다시 가져옵니다.',
-    lasso: '사진 안에서 자유롭게 둘러 선택하세요.',
+    lasso: '사진 안에서 자유롭게 둘러 선택하고 Delete로 지우세요.',
     pan: '드래그해 화면을 옮기세요. 스페이스바를 누른 채 이동할 수도 있습니다.',
     crop: '사진 안에서 자를 사각형을 드래그하세요.',
     sample: '사진을 눌러 채울 배경색을 찍으세요.',
@@ -1875,8 +2001,11 @@ function redo(): void {
   refreshEditSummary();
 }
 
+const NON_TEXT_INPUTS = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'color', 'file']);
+
 function editingField(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
+  // Sliders keep focus after a drag; only text entry should swallow tool shortcuts.
+  return (target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type)) || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
 }
 
 function keyDown(event: KeyboardEvent): void {
@@ -1888,7 +2017,13 @@ function keyDown(event: KeyboardEvent): void {
   if (document.body.classList.contains('is-processing') && event.key.toLowerCase() !== 'escape') return;
   if (editingField(event.target) || event.altKey) return;
   const key = event.key.toLowerCase();
-  if (key === 'o') { event.preventDefault(); void chooseImage(); }
+  const modifier = event.metaKey || event.ctrlKey;
+  if (!cancelCurrentWorker && penKey(key)) { event.preventDefault(); return; }
+  if (key === 'delete' || key === 'backspace') { event.preventDefault(); deleteSelection(); }
+  else if (modifier && key === 'd') { event.preventDefault(); deselect(); }
+  else if (key === '[' || key === ']') { event.preventDefault(); stepBrushSize(key === ']' ? 1 : -1); }
+  else if (!modifier && TOOL_KEYS[key] && state.panel === 'edit') { event.preventDefault(); setTool(TOOL_KEYS[key]); }
+  else if (key === 'o') { event.preventDefault(); void chooseImage(); }
   else if (key === 's') { event.preventDefault(); void saveProjectNow(); }
   else if (key === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
   else if (key === '+' || key === '=') { event.preventDefault(); zoomAt(state.view.zoom * 1.2); }

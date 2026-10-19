@@ -73,6 +73,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .delete-icon { color: var(--red); }
 .protect-icon { color: var(--blue); }
 .erase-icon, .restore-icon, .lasso-icon, .pan-icon { color: #596b72; }
+.tool-key { margin-left: auto; font: 600 10px/1 ui-monospace, monospace; color: #8a9a9f; border: 1px solid #d8e0dd; border-radius: 3px; padding: 2px 4px; }
 .tool-hint { margin: 10px 0 0; padding: 8px 9px; background: #f6f8f7; border-left: 2px solid #91aab0; color: #596b72; font-size: 11px; line-height: 1.45; }
 .control-section { background: #fcfdfc; }
 .value-chip { color: var(--navy); background: #eef3f4; border-radius: 4px; padding: 3px 6px; font-size: 11px; font-variant-numeric: tabular-nums; }

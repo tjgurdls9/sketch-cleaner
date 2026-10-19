@@ -563,3 +563,82 @@ test('local AI auto cleanup, manual correction, export, and reopen preserve orig
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('photoshop-style tools edit a 12MP sheet instantly with real mouse and keys', async () => {
+  // Paper points away from every edit: a stray stroke or selection would change one of them.
+  const PAPER_GRID: Array<[number, number]> = [[100, 100], [1000, 400], [3800, 200], [1500, 1700], [3000, 1700], [2000, 2000], [2500, 2150], [600, 2500], [3500, 2800], [3900, 2950]];
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sketch-tools-'));
+  const sourcePath = path.join(root, 'large-sheet.png');
+  const [width, height] = [4000, 3000];
+  const sheet = Buffer.alloc(width * height * 4);
+  for (let offset = 0; offset < sheet.length; offset += 4) sheet.set([246, 243, 236, 255], offset);
+  for (let y = 1400; y < 1440; y += 1) for (let x = 0; x < width; x += 1) sheet.set([40, 40, 40, 255], (y * width + x) * 4);
+  await sharp(sheet, { raw: { width, height, channels: 4 } }).png().toFile(sourcePath);
+  const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
+  const executablePath = process.env.SKETCH_TEST_EXECUTABLE;
+  const app = await electron.launch({ executablePath, args: [...(executablePath ? [] : ['.']), `--user-data-dir=${path.join(root, 'profile')}`], env });
+  try {
+    const page = await app.firstWindow();
+    const pageErrors: string[] = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showOpenDialog', { configurable: true, value: async () => ({ canceled: false, filePaths: [filePath] }) });
+    }, sourcePath);
+    await page.locator('#emptyOpenButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText('4,000');
+    const point = (x: number, y: number) => imageScreenPoint(page, x, y, width, height);
+    const settle = () => page.evaluate(() => new Promise<number>(resolve => requestAnimationFrame(() => resolve(performance.now()))));
+    const overlayShown = () => page.locator('#processingOverlay').isVisible();
+
+    // E: one eraser stroke across the dark band.
+    await page.keyboard.press('e');
+    await expect(page.locator('button[data-tool="erase"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#brushSize').fill('60');
+    const stroke = async (from: number, to: number): Promise<number> => {
+      const start = await point(from, 1420);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (let x = from; x <= to; x += 100) { const next = await point(x, 1420); await page.mouse.move(next.x, next.y); }
+      const began = await page.evaluate(() => performance.now());
+      await page.mouse.up();
+      return await settle() - began;
+    };
+    const eraseTimes = [await stroke(400, 1000), await stroke(1000, 1600), await stroke(200, 300)];
+    expect(await overlayShown()).toBe(false);
+
+    // M: drag a rectangle on the band and Delete it.
+    await page.keyboard.press('m');
+    const [a, b] = [await point(2000, 1300), await point(2600, 1500)];
+    await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 5 }); await page.mouse.up();
+    const deleteBegan = await page.evaluate(() => performance.now());
+    await page.keyboard.press('Delete');
+    const deleteMs = await settle() - deleteBegan;
+    expect(await overlayShown()).toBe(false);
+
+    // P: three straight segments closed with Enter, then Backspace deletes.
+    await page.keyboard.press('p');
+    for (const [x, y] of [[3000, 1300], [3600, 1300], [3600, 1550]]) { const next = await point(x, y); await page.mouse.click(next.x, next.y); }
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Backspace');
+    expect(await overlayShown()).toBe(false);
+    await page.screenshot({ path: path.join(process.env.SKETCH_SHOT_DIR ?? root, 'photoshop-tools.png') });
+
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    const saved = await page.evaluate(async ([w, PAPER_GRID]) => {
+      const recent = await window.desktop.listRecent();
+      if (!recent.ok || !recent.value[0]) throw new Error('저장된 프로젝트가 없습니다.');
+      const reopened = await window.desktop.openRecent(recent.value[0].id);
+      if (!reopened.ok) throw new Error(reopened.error);
+      const at = (x: number, y: number) => [...reopened.value.snapshot.working.data.slice((y * w + x) * 4, (y * w + x) * 4 + 3)];
+      return { erased: at(1000, 1420), marquee: at(2300, 1420), pen: at(3500, 1420), untouched: at(3800, 1420), paperGrid: PAPER_GRID.filter(([x, y]) => at(x, y).join() !== '246,243,236') };
+    }, [width, PAPER_GRID] as const);
+    expect(saved).toEqual({ erased: [255, 255, 255], marquee: [255, 255, 255], pen: [255, 255, 255], untouched: [40, 40, 40], paperGrid: [] });
+    expect(pageErrors).toEqual([]);
+    console.log(`12MP eraser strokes ${eraseTimes.map(ms => ms.toFixed(0)).join('/')}ms, marquee Delete ${deleteMs.toFixed(0)}ms`);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

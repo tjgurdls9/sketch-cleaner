@@ -17,6 +17,7 @@ export type PixelJob =
   | { type: 'candidate'; snapshot: Snapshot; candidate: Pixels; transform: Affine }
   | { type: 'stroke'; snapshot: Snapshot; points: Point[]; brush: Brush; tool: MaskTool }
   | { type: 'restore'; snapshot: Snapshot; points: Point[]; brush: Brush }
+  | { type: 'erase'; snapshot: Snapshot; points: Point[]; brush: Brush; fill: Fill }
   | { type: 'lasso'; snapshot: Snapshot; polygon: Point[]; mode: LassoMode }
   | { type: 'rotate'; snapshot: Snapshot; degrees: number }
   | { type: 'crop'; snapshot: Snapshot; rect: Rect }
@@ -401,20 +402,64 @@ function selectedEdit(snapshot: Snapshot, candidateAt: (x: number, y: number, ou
   return changed ? withVersion(snapshot, { working: { ...snapshot.working, data: working } }) : snapshot;
 }
 
+function fillColor(snapshot: Snapshot, fill: Fill): number[] {
+  if (fill?.kind === 'white') return [255, 255, 255, 255];
+  if (fill?.kind !== 'sample') throw new TypeError('Invalid fill');
+  const { x, y } = fill.point;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= snapshot.working.width || y >= snapshot.working.height) throw new RangeError('Sample point is outside the image');
+  const offset = (Math.floor(y) * snapshot.working.width + Math.floor(x)) * 4;
+  return [...snapshot.working.data.slice(offset, offset + 4)];
+}
+
 export function fillSelection(snapshot: Snapshot, fill: Fill, progress?: PixelProgress): Snapshot {
   validateSnapshot(snapshot);
-  let color: number[];
-  if (fill?.kind === 'white') color = [255, 255, 255, 255];
-  else if (fill?.kind === 'sample') {
-    const { x, y } = fill.point;
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= snapshot.working.width || y >= snapshot.working.height) throw new RangeError('Sample point is outside the image');
-    const offset = (Math.floor(y) * snapshot.working.width + Math.floor(x)) * 4;
-    color = [...snapshot.working.data.slice(offset, offset + 4)];
-  } else throw new TypeError('Invalid fill');
+  const color = fillColor(snapshot, fill);
   return selectedEdit(snapshot, (_x, _y, output) => {
     output[0] = color[0]; output[1] = color[1]; output[2] = color[2]; output[3] = color[3];
     return true;
   }, progress);
+}
+
+/** Paints the fill color straight into the working pixels along a stroke; protected pixels are kept. */
+export function eraseStroke(snapshot: Snapshot, points: readonly Point[], brush: Brush, fill: Fill, progress?: PixelProgress): Snapshot {
+  validateSnapshot(snapshot);
+  validateBrush(brush);
+  validatePoints(points);
+  const color = fillColor(snapshot, fill);
+  if (brush.strength === 0) return snapshot;
+  const { width } = snapshot.working;
+  const { bounds, coverage, total } = rasterizeStroke(points, brush, width, snapshot.working.height, progress);
+  let working = snapshot.working.data;
+  const blended = [0, 0, 0, 0];
+  for (let row = 0; row < bounds.height; row++) {
+    for (let column = 0; column < bounds.width; column++) {
+      const index = (bounds.y + row) * width + bounds.x + column;
+      const amount = (coverage[row * bounds.width + column] / 255) * brush.strength * (1 - snapshot.protectMask[index] / 255);
+      if (!amount || !mixedPixel(snapshot.working.data, index * 4, color, amount, blended)) continue;
+      if (working === snapshot.working.data) working = snapshot.working.data.slice();
+      working.set(blended, index * 4);
+    }
+    progress?.(total - bounds.height + row + 1, total);
+  }
+  return working === snapshot.working.data ? snapshot : withVersion(snapshot, { working: { ...snapshot.working, data: working } });
+}
+
+/** Photoshop marquee geometry: Shift keeps a square, Alt grows from the press point. */
+export function marqueeRect(start: Point, end: Point, options: { square?: boolean; fromCenter?: boolean } = {}): Rect {
+  let dx = end.x - start.x;
+  let dy = end.y - start.y;
+  if (options.square) {
+    const side = Math.max(Math.abs(dx), Math.abs(dy));
+    dx = Math.sign(dx || 1) * side;
+    dy = Math.sign(dy || 1) * side;
+  }
+  if (options.fromCenter) return { x: start.x - Math.abs(dx), y: start.y - Math.abs(dy), width: Math.abs(dx) * 2, height: Math.abs(dy) * 2 };
+  return { x: Math.min(start.x, start.x + dx), y: Math.min(start.y, start.y + dy), width: Math.abs(dx), height: Math.abs(dy) };
+}
+
+export function rectPolygon(rect: Rect): Point[] {
+  const { x, y, width, height } = rect;
+  return [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }];
 }
 
 export function adjustSelection(snapshot: Snapshot, adjustment: Tone, progress?: PixelProgress): Snapshot {
@@ -624,6 +669,7 @@ export function runPixelJob(job: PixelJob, progress?: PixelProgress): Pixels | S
     case 'candidate': return applyCandidate(job.snapshot, job.candidate, job.transform, progress);
     case 'stroke': return paintStroke(job.snapshot, job.points, job.brush, job.tool, progress);
     case 'restore': return restoreStroke(job.snapshot, job.points, job.brush, progress);
+    case 'erase': return eraseStroke(job.snapshot, job.points, job.brush, job.fill, progress);
     case 'lasso': return selectLasso(job.snapshot, job.polygon, job.mode, progress);
     case 'rotate': return rotateBasis(job.snapshot, job.degrees, progress);
     case 'crop': return cropBasis(job.snapshot, job.rect, progress);
