@@ -17,12 +17,19 @@ it('connects real renderer controls to worker edits, manual request review and P
   document.open();
   document.write(await readFile(`${process.cwd()}/index.html`, 'utf8'));
   document.close();
+  let sceneFrame: { width: number; height: number; data: Uint8ClampedArray } | null = null;
   const context = {
     createImageData: (width: number, height: number) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) }),
     putImageData() {}, clearRect() {}, fillRect() {}, strokeRect() {}, beginPath() {}, closePath() {},
     moveTo() {}, lineTo() {}, arc() {}, stroke() {}, fill() {}, setTransform() {}, setLineDash() {}, save() {}, restore() {},
   };
-  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: () => context });
+  const canvasContext = (canvas: HTMLCanvasElement) => ({
+    ...context,
+    putImageData(image: { width: number; height: number; data: Uint8ClampedArray }) {
+      if (canvas.id === 'sceneCanvas') sceneFrame = { width: image.width, height: image.height, data: image.data.slice() };
+    },
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: function (this: HTMLCanvasElement) { return canvasContext(this); } });
   Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', { configurable: true, value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 320, bottom: 240, width: 320, height: 240, toJSON() {} }) });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('Worker', class {
@@ -41,10 +48,10 @@ it('connects real renderer controls to worker edits, manual request review and P
   });
   let confirmAnswer = true;
   vi.stubGlobal('confirm', () => confirmAnswer);
-  const makePixels = (color: number[]): Pixels => {
-    const data = new Uint8ClampedArray(24 * 16 * 4);
+  const makePixels = (color: number[], width = 24, height = 16): Pixels => {
+    const data = new Uint8ClampedArray(width * height * 4);
     for (let i = 0; i < data.length; i += 4) data.set(color, i);
-    return { width: 24, height: 16, data };
+    return { width, height, data };
   };
   const id = '11111111-1111-4111-8111-111111111111';
   let project: Project | null = null;
@@ -86,7 +93,7 @@ it('connects real renderer controls to worker edits, manual request review and P
       return ok(browserClone(request));
     },
     loadRequest: async () => request ? ok(browserClone(request)) : { ok: false, error: '요청 없음' },
-    importCandidate: async (_id, requestId) => ok({ id: '33333333-3333-4333-8333-333333333333', requestId, name: 'result.png', pixels: makePixels([80, 110, 140, 255]) }),
+    importCandidate: async (_id, requestId) => ok({ id: '33333333-3333-4333-8333-333333333333', requestId, name: 'result.png', pixels: makePixels([80, 110, 140, 255], 240, 160) }),
     forkRequest: async () => { if (!project) throw new Error('Missing project'); return ok(browserClone(project)); },
     exportPNG: async (_id, pixels) => { exported = browserClone(pixels); return ok({ path: 'C:\\LocalTest\\result.png', width: pixels.width, height: pixels.height }); },
     openFolder: async () => ok(undefined), openChatGPT: async () => ok(undefined), copyRequest: async () => ok(undefined),
@@ -112,12 +119,23 @@ it('connects real renderer controls to worker edits, manual request review and P
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="copy-request"]')?.disabled).toBe(false));
   click('#tabReview'); click('[data-action="import-candidate"]');
   await vi.waitFor(() => expect(document.querySelector('#alignmentAck')).not.toBeNull());
+  expect(document.querySelector('#zoomReadout')?.textContent).toBe('30%');
   expect(document.querySelector<HTMLButtonElement>('[data-action="apply-candidate"]')?.disabled).toBe(true);
   const ack = document.querySelector<HTMLInputElement>('#alignmentAck')!;
   ack.checked = true; ack.dispatchEvent(new Event('change', { bubbles: true }));
   click('[data-action="apply-candidate"]');
   await waitForSaved([80, 110, 140, 255]);
-  click('#tabExport'); click('[data-action="export-png"]');
+  click('#tabExport');
+  await vi.waitFor(() => expect(sceneFrame?.width).toBe(320));
+  expect(document.querySelector('#zoomReadout')?.textContent).toBe('100%');
+  const sceneColorAt = (x: number, y: number): number[] => {
+    if (!sceneFrame) throw new Error('캔버스 프레임이 렌더링되지 않았습니다.');
+    const offset = (y * sceneFrame.width + x) * 4;
+    return [...sceneFrame.data.subarray(offset, offset + 4)];
+  };
+  expect(sceneColorAt(160, 120)).not.toEqual([234, 238, 236, 255]);
+  expect(sceneColorAt(1, 1)).toEqual([234, 238, 236, 255]);
+  click('[data-action="export-png"]');
   await vi.waitFor(() => expect(exported).not.toBeNull());
   expect([...exported!.data.slice(0, 4)]).toEqual([80, 110, 140, 255]);
   expect(document.querySelector('#errorBanner')?.hasAttribute('hidden')).toBe(true);

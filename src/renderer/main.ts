@@ -1071,12 +1071,14 @@ function setTool(tool: Tool): void {
 }
 
 function setPanel(panel: Panel): void {
+  const leavingSideBySideReview = state.panel === 'review' && Boolean(state.candidate)
+    && state.compareMode === 'side' && panel !== 'review';
   state.panel = panel;
   selectPanelTab(panel);
   if (panel === 'review' && state.candidate) {
     state.tool = 'pan';
     if (state.compareMode === 'side') fitView();
-  }
+  } else if (leavingSideBySideReview) fitView();
   renderInspector();
   renderCanvas();
   if (panel === 'request' && state.requestId && state.requestBundle?.info.id !== state.requestId) void loadRequest(state.requestId, 'request');
