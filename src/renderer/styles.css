@@ -179,6 +179,7 @@ body.is-processing .tool-rail, body.is-processing .inspector, body.is-processing
 .auto-clean-status { display: grid; gap: 4px; margin: 0 0 10px; padding: 10px; border: 1px solid #dfe6e3; border-radius: 5px; background: #f7f9f8; color: #566a70; font-size: 11px; line-height: 1.45; }
 .auto-clean-status strong { color: #344d58; font-size: 11px; }
 .auto-clean-status[data-state="complete"] { border-color: #d2e2d8; background: #f2f7f3; }
+.auto-clean-status[data-state="review"] { border-color: #e9cbc5; background: #fcf4f2; }
 .auto-clean-status[data-state="unchanged"], .auto-clean-status[data-state="failed"] { border-color: #e8dac2; background: #fbf7ef; }
 .auto-clean-status[data-state="cancelled"] { border-color: #dfe6e3; background: #f7f9f8; }
 .result-save-action { margin-top: 8px; }

@@ -467,7 +467,9 @@ test('local AI auto cleanup, manual correction, export, and reopen preserve orig
     expect(originalKoreanInk).toBeGreaterThan(30);
 
     await page.locator('[data-action="auto-clean"]').click();
-    await expect(status).toHaveAttribute('data-state', 'complete', { timeout: 120_000 });
+    // The red mark inside the shirt is a note: it is selected for review, not erased.
+    await expect(status).toHaveAttribute('data-state', 'review', { timeout: 120_000 });
+    await expect(page.locator('#maskToggleButton')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#processingOverlay')).toBeHidden({ timeout: 120_000 });
     await page.locator('#saveProjectButton').click();
     await expect(page.locator('#saveState')).toContainText('저장됨');
