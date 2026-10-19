@@ -42,8 +42,10 @@ function garmentPage(): Pixels {
   // Detached stitch and button marks are details inside the two keep regions.
   put(page, 39, 51, BLACK);
   put(page, 79, 55, BLACK);
+  put(page, 36, 60, RED);
   // Small exterior text, a ruled table, a red annotation arrow, and a gray paper shadow.
   line(page, 7, 8, 11, 16, BLACK);
+  put(page, 6, 8, [190, 190, 190, 255]);
   line(page, 11, 16, 15, 8, BLACK);
   line(page, 9, 12, 13, 12, BLACK);
   for (const y of [83, 89, 95]) line(page, 2, y, 19, y, BLACK);
@@ -56,7 +58,7 @@ function garmentPage(): Pixels {
 }
 
 function draft(snapshot: Snapshot, progress?: (completed: number, total: number) => void): Snapshot {
-  return runPixelJob({ type: 'auto-clean', snapshot } as never, progress) as Snapshot;
+  return runPixelJob({ type: 'auto-clean', snapshot }, progress) as Snapshot;
 }
 
 function rgba(pixels: Pixels, x: number, y: number): number[] {
@@ -78,8 +80,10 @@ describe('automatic cleanup draft', () => {
     expect(rgba(result.working, 27, 29)).toEqual(rgba(imported, 27, 29));
     expect(rgba(result.working, 39, 51)).toEqual(rgba(imported, 39, 51));
     expect(rgba(result.working, 79, 55)).toEqual(rgba(imported, 79, 55));
+    expect(rgba(result.working, 36, 60)).toEqual(rgba(imported, 36, 60));
     expect(rgba(result.working, 10, 12)).toEqual(WHITE);
     expect(result.deleteMask[12 * 120 + 10]).toBeGreaterThan(0);
+    expect(rgba(result.working, 6, 8)).toEqual(WHITE);
     expect(rgba(result.working, 10, 89)).toEqual(WHITE);
     expect(result.deleteMask[89 * 120 + 10]).toBeGreaterThan(0);
     expect(rgba(result.working, 10, 25)).toEqual(WHITE);
@@ -91,22 +95,45 @@ describe('automatic cleanup draft', () => {
   });
 
   it('uses protect as D times one-minus-P and restores full protection byte-exactly from B', () => {
-    const base = canvas(40, 30, [251, 250, 249, 255]);
-    const working = canvas(40, 30);
+    const base = canvas(120, 100, [251, 250, 249, 255]);
+    const working = canvas(120, 100);
+    shirt(working, 42);
     for (let x = 8; x <= 28; x += 1) put(working, x, 14, RED);
     const snapshot = createSnapshot(base, 'base-protect');
     snapshot.working = working;
-    snapshot.protectMask[14 * 40 + 18] = 128;
-    snapshot.protectMask[14 * 40 + 19] = 255;
+    snapshot.protectMask[14 * 120 + 18] = 128;
+    snapshot.protectMask[14 * 120 + 19] = 255;
 
     const result = draft(snapshot);
 
-    const softIndex = 14 * 40 + 18;
+    const softIndex = 14 * 120 + 18;
     const softOffset = softIndex * 4;
     const amount = (result.deleteMask[softIndex] / 255) * (1 - 128 / 255);
     expect(result.working.data[softOffset]).toBe(Math.round(245 * (1 - amount) + 255 * amount));
     expect(result.working.data[softOffset + 1]).toBe(Math.round(24 * (1 - amount) + 255 * amount));
     expect(rgba(result.working, 19, 14)).toEqual(rgba(base, 19, 14));
+    expect(draft(result)).toBe(result);
+  });
+
+  it('does not reapply old delete coverage to retained figure pixels or soft-protected details', () => {
+    const imported = garmentPage();
+    const snapshot = createSnapshot(imported, 'base-manual-mask');
+    const opaqueOffset = (35 * 120 + 45) * 4;
+    const softOffset = (51 * 120 + 39) * 4;
+    snapshot.working.data.set([130, 131, 132, 255], opaqueOffset);
+    snapshot.working.data.set([175, 176, 177, 255], softOffset);
+    snapshot.deleteMask[35 * 120 + 45] = 255;
+    snapshot.deleteMask[51 * 120 + 39] = 180;
+    snapshot.protectMask[51 * 120 + 39] = 128;
+    const retainedOpaque = rgba(snapshot.working, 45, 35);
+    const retainedSoft = rgba(snapshot.working, 39, 51);
+
+    const result = draft(snapshot);
+
+    expect(rgba(result.working, 45, 35)).toEqual(retainedOpaque);
+    expect(rgba(result.working, 39, 51)).toEqual(retainedSoft);
+    expect(result.deleteMask[35 * 120 + 45]).toBe(255);
+    expect(result.deleteMask[51 * 120 + 39]).toBe(180);
   });
 
   it('returns the identical snapshot when no confident figure or editable ink exists', () => {

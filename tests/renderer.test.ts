@@ -32,12 +32,16 @@ it('connects real renderer controls to worker edits, manual request review and P
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: function (this: HTMLCanvasElement) { return canvasContext(this); } });
   Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', { configurable: true, value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 320, bottom: 240, width: 320, height: 240, toJSON() {} }) });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const workerJobs: string[] = [];
+  let holdNextAutoClean = false;
   vi.stubGlobal('Worker', class {
     onmessage: ((event: { data: PixelJobResponse }) => void) | null = null;
     onerror: ((event: ErrorEvent) => void) | null = null;
     ended = false;
     postMessage(message: PixelJobRequest) {
       if (typeof message.id !== 'string') return;
+      workerJobs.push(message.job.type);
+      if (message.job.type === 'auto-clean' && holdNextAutoClean) { holdNextAutoClean = false; return; }
       setTimeout(() => {
         if (this.ended) return;
         try { this.onmessage?.({ data: { id: message.id, type: 'result', value: runPixelJob(browserClone(message.job)) } }); }
@@ -53,6 +57,13 @@ it('connects real renderer controls to worker edits, manual request review and P
     for (let i = 0; i < data.length; i += 4) data.set(color, i);
     return { width, height, data };
   };
+  let importedPhoto: Pixels | null = null;
+  const makePhoto = (): Pixels => {
+    const pixels = makePixels([190, 180, 170, 255]);
+    pixels.data[pixels.data.length - 1] = 0;
+    importedPhoto = pixels;
+    return pixels;
+  };
   const id = '11111111-1111-4111-8111-111111111111';
   let project: Project | null = null;
   let request: RequestBundle | null = null;
@@ -61,15 +72,17 @@ it('connects real renderer controls to worker edits, manual request review and P
   let cloneCalls = 0;
   let delayedOpen = false;
   let releaseOpen: (() => void) | null = null;
+  let openProjectCalls = 0;
   const ok = <T>(value: T): Reply<T> => ({ ok: true, value });
   const api: DesktopAPI = {
-    importImage: async () => ok({ sourceId: id, name: '업무사진.png', pixels: makePixels([190, 180, 170, 255]) }),
-    importDropped: async () => ok({ sourceId: id, name: '업무사진.png', pixels: makePixels([190, 180, 170, 255]) }),
+    importImage: async () => ok({ sourceId: id, name: '업무사진.png', pixels: makePhoto() }),
+    importDropped: async () => ok({ sourceId: id, name: '업무사진.png', pixels: makePhoto() }),
     createProject: async (_sourceId, snapshot) => {
       project = { id, name: '업무사진', folder: 'C:\\LocalTest', snapshot: browserClone(snapshot), requests: [], recovered: false };
       return ok(browserClone(project));
     },
     listRecent: async () => ok([]), openProject: async () => {
+      openProjectCalls += 1;
       if (!delayedOpen) return ok(project);
       const next = { ...browserClone(project!), id: '44444444-4444-4444-8444-444444444444', name: '다른 작업' };
       return new Promise(resolve => { releaseOpen = () => resolve(ok(next)); });
@@ -108,10 +121,34 @@ it('connects real renderer controls to worker edits, manual request review and P
   const waitForSaved = async (color: number[]) => { await vi.waitFor(() => expect(savedColor()).toEqual(color), { timeout: 6000 }); };
   click('#emptyOpenButton');
   await vi.waitFor(() => { expect(document.querySelector('#errorText')?.textContent).toBe(''); expect(document.querySelector('#imageDimensions')?.textContent).toContain('24'); });
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('unchanged'));
+  expect(document.querySelector('#autoCleanStatus')?.textContent?.trim()).toBe('자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.');
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(1);
+  expect(document.querySelector('#maskToggleButton')?.getAttribute('aria-pressed')).toBe('false');
+  const sceneColorAt = (x: number, y: number): number[] => {
+    if (!sceneFrame) throw new Error('캔버스 프레임이 렌더링되지 않았습니다.');
+    const offset = (y * sceneFrame.width + x) * 4;
+    return [...sceneFrame.data.subarray(offset, offset + 4)];
+  };
+  expect(sceneColorAt(171, 127)).toEqual([255, 255, 255, 255]);
+  const beforeCancelVersion = project!.snapshot.workVersion;
+  const beforeCancelColor = savedColor();
+  holdNextAutoClean = true;
+  click('[data-action="auto-clean"]');
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('running'));
+  click('#cancelJobButton');
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('cancelled'));
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(2);
+  expect(project!.snapshot.workVersion).toBe(beforeCancelVersion);
+  expect(savedColor()).toEqual(beforeCancelColor);
+  click('[data-tool="delete"]');
   click('[data-action="select-all"]');
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="fill-white"]')?.disabled).toBe(false));
+  expect(sceneColorAt(148, 112)).toEqual([194, 145, 134, 255]);
   click('[data-action="fill-white"]');
   await waitForSaved([255, 255, 255, 255]);
+  expect([...importedPhoto!.data.slice(0, 4)]).toEqual([190, 180, 170, 255]);
+  expect(importedPhoto!.data[importedPhoto!.data.length - 1]).toBe(0);
   click('#undoButton'); await waitForSaved([190, 180, 170, 255]);
   click('#redoButton'); await waitForSaved([255, 255, 255, 255]);
   click('#tabRequest'); click('[data-action="create-request"]');
@@ -121,6 +158,12 @@ it('connects real renderer controls to worker edits, manual request review and P
   await vi.waitFor(() => expect(document.querySelector('#alignmentAck')).not.toBeNull());
   expect(document.querySelector('#zoomReadout')?.textContent).toBe('30%');
   expect(document.querySelector<HTMLButtonElement>('[data-action="apply-candidate"]')?.disabled).toBe(true);
+  const overlayRadio = document.querySelector<HTMLInputElement>('input[name="comparison"][value="overlay"]')!;
+  overlayRadio.checked = true; overlayRadio.dispatchEvent(new Event('change', { bubbles: true }));
+  if (document.querySelector('#maskToggleButton')?.getAttribute('aria-pressed') === 'true') click('#maskToggleButton');
+  expect(sceneColorAt(160, 120)).toEqual([135, 145, 155, 255]);
+  const sideRadio = document.querySelector<HTMLInputElement>('input[name="comparison"][value="side"]')!;
+  sideRadio.checked = true; sideRadio.dispatchEvent(new Event('change', { bubbles: true }));
   const ack = document.querySelector<HTMLInputElement>('#alignmentAck')!;
   ack.checked = true; ack.dispatchEvent(new Event('change', { bubbles: true }));
   click('[data-action="apply-candidate"]');
@@ -128,11 +171,6 @@ it('connects real renderer controls to worker edits, manual request review and P
   click('#tabExport');
   await vi.waitFor(() => expect(sceneFrame?.width).toBe(320));
   expect(document.querySelector('#zoomReadout')?.textContent).toBe('100%');
-  const sceneColorAt = (x: number, y: number): number[] => {
-    if (!sceneFrame) throw new Error('캔버스 프레임이 렌더링되지 않았습니다.');
-    const offset = (y * sceneFrame.width + x) * 4;
-    return [...sceneFrame.data.subarray(offset, offset + 4)];
-  };
   expect(sceneColorAt(160, 120)).not.toEqual([234, 238, 236, 255]);
   expect(sceneColorAt(1, 1)).toEqual([234, 238, 236, 255]);
   click('[data-action="export-png"]');
@@ -156,6 +194,7 @@ it('connects real renderer controls to worker edits, manual request review and P
   click('#moreMenuButton'); click('#openProjectButton');
   await vi.waitFor(() => expect(releaseOpen).not.toBeNull());
   const brightness = document.querySelector<HTMLInputElement>('#brightness')!;
+  document.querySelectorAll<HTMLDetailsElement>('.advanced-block')[1].open = true;
   brightness.value = '-25'; brightness.dispatchEvent(new Event('input', { bubbles: true }));
   click('[data-action="preview-adjust"]');
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="apply-adjust"]')?.disabled).toBe(false));
@@ -164,6 +203,13 @@ it('connects real renderer controls to worker edits, manual request review and P
   releaseOpen!();
   await vi.waitFor(() => expect(document.querySelector('#projectName')?.textContent).toBe('업무사진'));
   await waitForSaved([230, 230, 230, 255]);
+  const autoCleanCount = workerJobs.filter(type => type === 'auto-clean').length;
+  delayedOpen = false;
+  confirmAnswer = true;
+  click('#moreMenuButton'); click('#openProjectButton');
+  await vi.waitFor(() => expect(openProjectCalls).toBe(2));
+  await vi.waitFor(() => expect(document.querySelector('#autoCleanStatus')?.getAttribute('data-state')).toBe('idle'));
+  expect(workerJobs.filter(type => type === 'auto-clean')).toHaveLength(autoCleanCount);
 }, 30_000);
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });

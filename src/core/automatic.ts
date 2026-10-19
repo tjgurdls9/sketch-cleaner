@@ -1,0 +1,330 @@
+import type { Snapshot } from '../shared/types';
+
+export const MAX_AUTO_ANALYSIS_PIXELS = 1_000_000;
+
+type Progress = (completed: number, total: number) => void;
+interface Bounds { left: number; top: number; right: number; bottom: number; count: number }
+
+function analysisSize(width: number, height: number): { width: number; height: number } {
+  const aspect = width / height;
+  if (aspect >= MAX_AUTO_ANALYSIS_PIXELS) return { width: MAX_AUTO_ANALYSIS_PIXELS, height: 1 };
+  if (1 / aspect >= MAX_AUTO_ANALYSIS_PIXELS) return { width: 1, height: MAX_AUTO_ANALYSIS_PIXELS };
+  const analysisWidth = Math.min(width, Math.max(1, Math.floor(Math.sqrt(MAX_AUTO_ANALYSIS_PIXELS * aspect))));
+  let analysisHeight = Math.min(height, Math.max(1, Math.floor(MAX_AUTO_ANALYSIS_PIXELS / analysisWidth)));
+  let finalWidth = analysisWidth;
+  while (finalWidth * analysisHeight > MAX_AUTO_ANALYSIS_PIXELS) finalWidth -= 1;
+  if (finalWidth !== analysisWidth) analysisHeight = Math.min(height, Math.floor(MAX_AUTO_ANALYSIS_PIXELS / finalWidth));
+  return { width: finalWidth, height: analysisHeight };
+}
+
+function pixelKind(data: Uint8ClampedArray, offset: number): 'red' | 'ink' | 'shadow' | '' {
+  const red = data[offset];
+  const green = data[offset + 1];
+  const blue = data[offset + 2];
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  if (red >= 120 && red - green >= 45 && red - blue >= 35 && red > green * 1.3 && red > blue * 1.25) return 'red';
+  if (maximum <= 170 && maximum - minimum <= 60) return 'ink';
+  const light = (red + green + blue) / 3;
+  if (light >= 210 && light < 246 && maximum - minimum <= 18) return 'shadow';
+  return '';
+}
+
+function isAntialiasedInk(data: Uint8ClampedArray, offset: number): boolean {
+  const red = data[offset];
+  const green = data[offset + 1];
+  const blue = data[offset + 2];
+  return Math.max(red, green, blue) <= 220 && Math.max(red, green, blue) - Math.min(red, green, blue) <= 45;
+}
+
+function componentIsGrid(id: number, labels: Int32Array, gridWidth: number, region: Bounds): boolean {
+  const width = region.right - region.left + 1;
+  const height = region.bottom - region.top + 1;
+  if (width < 4 || height < 4) return false;
+  const area = width * height;
+  if (area > 262_144) return false;
+  const rows = new Uint32Array(height);
+  const columns = new Uint32Array(width);
+  for (let y = 0; y < height; y += 1) {
+    const row = (region.top + y) * gridWidth + region.left;
+    for (let x = 0; x < width; x += 1) {
+      if (labels[row + x] !== id) continue;
+      rows[y] += 1;
+      columns[x] += 1;
+    }
+  }
+  let wideRows = 0;
+  let tallColumns = 0;
+  for (const value of rows) if (value >= Math.ceil(width * 0.55)) wideRows += 1;
+  for (const value of columns) if (value >= Math.ceil(height * 0.55)) tallColumns += 1;
+  return wideRows >= 2 && tallColumns >= 2;
+}
+
+function labelInk(ink: Uint8Array, width: number, height: number, progress?: Progress, progressOffset = 0, progressTotal = height): { labels: Int32Array; components: Bounds[] } {
+  const labels = new Int32Array(ink.length);
+  const queue = new Int32Array(ink.length);
+  const components: Bounds[] = [];
+  let nextId = 0;
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const start = rowStart + x;
+      if (!ink[start] || labels[start]) continue;
+      const id = ++nextId;
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      labels[start] = id;
+      const bounds: Bounds = { left: x, top: y, right: x, bottom: y, count: 0 };
+      while (head < tail) {
+        const current = queue[head++];
+        const cx = current % width;
+        const cy = (current / width) | 0;
+        bounds.count += 1;
+        if (cx < bounds.left) bounds.left = cx;
+        if (cx > bounds.right) bounds.right = cx;
+        if (cy < bounds.top) bounds.top = cy;
+        if (cy > bounds.bottom) bounds.bottom = cy;
+        const y0 = Math.max(0, cy - 1);
+        const y1 = Math.min(height - 1, cy + 1);
+        const x0 = Math.max(0, cx - 1);
+        const x1 = Math.min(width - 1, cx + 1);
+        for (let ny = y0; ny <= y1; ny += 1) {
+          const neighborRow = ny * width;
+          for (let nx = x0; nx <= x1; nx += 1) {
+            const neighbor = neighborRow + nx;
+            if (!ink[neighbor] || labels[neighbor]) continue;
+            labels[neighbor] = id;
+            queue[tail++] = neighbor;
+          }
+        }
+      }
+      components.push(bounds);
+    }
+    progress?.(progressOffset + y + 1, progressTotal);
+  }
+  return { labels, components };
+}
+
+function makeKeepRegions(labels: Int32Array, gridWidth: number, gridHeight: number, anchors: readonly { id: number; bounds: Bounds }[]): Uint8Array {
+  const keep = new Uint8Array(labels.length);
+  for (const anchor of anchors) {
+    const { bounds, id } = anchor;
+    const componentWidth = bounds.right - bounds.left + 1;
+    const componentHeight = bounds.bottom - bounds.top + 1;
+    const marginX = Math.max(2, Math.round(componentWidth * 0.12));
+    const marginY = Math.max(1, Math.round(componentHeight * 0.025));
+    const firstRow = Math.max(0, bounds.top - marginY);
+    const lastRow = Math.min(gridHeight - 1, bounds.bottom + marginY);
+    const rowMin = new Int32Array(componentHeight);
+    const rowMax = new Int32Array(componentHeight);
+    rowMin.fill(bounds.right + 1);
+    rowMax.fill(-1);
+    for (let y = bounds.top; y <= bounds.bottom; y += 1) {
+      const row = y * gridWidth;
+      for (let x = bounds.left; x <= bounds.right; x += 1) {
+        if (labels[row + x] !== id) continue;
+        const rowIndex = y - bounds.top;
+        rowMin[rowIndex] = Math.min(rowMin[rowIndex], x);
+        rowMax[rowIndex] = Math.max(rowMax[rowIndex], x);
+      }
+    }
+    for (let y = firstRow; y <= lastRow; y += 1) {
+      let left = bounds.left;
+      let right = bounds.right;
+      if (y >= bounds.top && y <= bounds.bottom) {
+        const index = y - bounds.top;
+        if (rowMax[index] >= rowMin[index]) {
+          left = rowMin[index];
+          right = rowMax[index];
+        }
+      }
+      left = Math.max(0, left - marginX);
+      right = Math.min(gridWidth - 1, right + marginX);
+      keep.fill(1, y * gridWidth + left, y * gridWidth + right + 1);
+    }
+  }
+  return keep;
+}
+
+function componentIsGarment(bounds: Bounds, analysisWidth: number, analysisHeight: number, gridPixels: number): boolean {
+  const width = bounds.right - bounds.left + 1;
+  const height = bounds.bottom - bounds.top + 1;
+  const aspect = width / height;
+  const density = bounds.count / (width * height);
+  return bounds.count >= Math.max(20, Math.floor(gridPixels * 0.00002))
+    && height >= Math.max(10, Math.ceil(analysisHeight * 0.12))
+    && width >= Math.max(6, Math.ceil(analysisWidth * 0.035))
+    && aspect >= 0.18 && aspect <= 1.7
+    && density >= 0.012 && density <= 0.5;
+}
+
+export function autoCleanDraft(snapshot: Snapshot, progress?: Progress): Snapshot {
+  const { width, height, data } = snapshot.working;
+  const size = analysisSize(width, height);
+  const gridWidth = size.width;
+  const gridHeight = size.height;
+  const gridPixels = gridWidth * gridHeight;
+  const ink = new Uint8Array(gridPixels);
+  const shadow = new Uint8Array(gridPixels);
+  const total = gridHeight * 2 + height;
+
+  for (let gy = 0; gy < gridHeight; gy += 1) {
+    const top = Math.floor(gy * height / gridHeight);
+    const bottom = Math.floor((gy + 1) * height / gridHeight);
+    for (let gx = 0; gx < gridWidth; gx += 1) {
+      const left = Math.floor(gx * width / gridWidth);
+      const right = Math.floor((gx + 1) * width / gridWidth);
+      const cell = gy * gridWidth + gx;
+      let hasInk = false;
+      let hasShadow = false;
+      for (let y = top; y < bottom && !(hasInk && hasShadow); y += 1) {
+        let offset = (y * width + left) * 4;
+        for (let x = left; x < right && !(hasInk && hasShadow); x += 1, offset += 4) {
+          const kind = pixelKind(data, offset);
+          if (kind === 'ink') hasInk = true;
+          else if (kind === 'shadow') hasShadow = true;
+          else if (isAntialiasedInk(data, offset)) hasInk = true;
+        }
+      }
+      ink[cell] = hasInk ? 1 : 0;
+      shadow[cell] = hasShadow ? 1 : 0;
+    }
+    progress?.(gy + 1, total);
+  }
+
+  const { labels, components } = labelInk(ink, gridWidth, gridHeight, progress, gridHeight, total);
+  const anchors: { id: number; bounds: Bounds }[] = [];
+  const gridFlags = new Uint8Array(components.length + 1);
+  const componentSmall = new Uint8Array(components.length + 1);
+  let largestAnchor = 0;
+  const hasGlobalGrid = (() => {
+    let broadRows = 0;
+    let tallColumns = 0;
+    for (let y = 0; y < gridHeight; y += 1) {
+      let count = 0;
+      const row = y * gridWidth;
+      for (let x = 0; x < gridWidth; x += 1) count += ink[row + x];
+      if (count >= Math.ceil(gridWidth * 0.55)) broadRows += 1;
+    }
+    for (let x = 0; x < gridWidth; x += 1) {
+      let count = 0;
+      for (let y = 0; y < gridHeight; y += 1) count += ink[y * gridWidth + x];
+      if (count >= Math.ceil(gridHeight * 0.55)) tallColumns += 1;
+    }
+    return broadRows >= 2 && tallColumns >= 2;
+  })();
+
+  for (let index = 0; index < components.length; index += 1) {
+    const bounds = components[index];
+    const id = index + 1;
+    const componentWidth = bounds.right - bounds.left + 1;
+    const componentHeight = bounds.bottom - bounds.top + 1;
+    const giantGrid = hasGlobalGrid
+      && componentWidth >= gridWidth * 0.5
+      && componentHeight >= gridHeight * 0.5;
+    const isGrid = giantGrid || componentIsGrid(id, labels, gridWidth, bounds);
+    if (isGrid) {
+      gridFlags[id] = 1;
+      continue;
+    }
+    if (componentIsGarment(bounds, gridWidth, gridHeight, gridPixels)) {
+      anchors.push({ id, bounds });
+      largestAnchor = Math.max(largestAnchor, bounds.count);
+    }
+  }
+
+  if (!anchors.length) {
+    progress?.(total, total);
+    return snapshot;
+  }
+
+  anchors.sort((a, b) => b.bounds.count - a.bounds.count);
+  const selectedAnchors = anchors.filter((anchor, index) => index < 4 && anchor.bounds.count >= Math.max(20, largestAnchor * 0.12));
+  const keep = makeKeepRegions(labels, gridWidth, gridHeight, selectedAnchors);
+  const anchorIds = new Uint8Array(components.length + 1);
+  for (const anchor of selectedAnchors) anchorIds[anchor.id] = 1;
+  for (let index = 0; index < components.length; index += 1) {
+    const bounds = components[index];
+    const id = index + 1;
+    if (anchorIds[id]) continue;
+    const componentWidth = bounds.right - bounds.left + 1;
+    const componentHeight = bounds.bottom - bounds.top + 1;
+    const small = componentHeight <= Math.max(8, Math.ceil(gridHeight * 0.12))
+      && componentWidth <= Math.max(24, Math.ceil(gridWidth * 0.2))
+      && bounds.count <= Math.max(220, Math.floor(largestAnchor * 0.18));
+    componentSmall[id] = small || gridFlags[id] ? 1 : 0;
+  }
+
+  let deleteMask = snapshot.deleteMask;
+  let working = snapshot.working.data;
+  let changed = false;
+  for (let y = 0; y < height; y += 1) {
+    const gridY = Math.min(gridHeight - 1, Math.floor(y * gridHeight / height));
+    const row = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const gridX = Math.min(gridWidth - 1, Math.floor(x * gridWidth / width));
+      const cell = gridY * gridWidth + gridX;
+      const keepPixel = keep[cell] !== 0;
+      const offset = (row + x) * 4;
+      const kind = pixelKind(data, offset);
+      const componentId = labels[cell];
+      const removeInk = !keepPixel && componentSmall[componentId] === 1 && kind === 'ink';
+      const removeAntialias = !keepPixel && componentSmall[componentId] === 1 && isAntialiasedInk(data, offset);
+      // Preserve colored construction details inside anchored figures; review these manually.
+      const removeRed = !keepPixel && kind === 'red';
+      const removeShadow = !keepPixel && shadow[cell] === 1 && kind === 'shadow';
+      const autoDelete = removeInk || removeAntialias || removeRed || removeShadow;
+      const maskIndex = row + x;
+      const previousMask = snapshot.deleteMask[maskIndex];
+      let nextMask = previousMask;
+      if (autoDelete && nextMask !== 255) nextMask = 255;
+      if (nextMask !== snapshot.deleteMask[maskIndex]) {
+        if (deleteMask === snapshot.deleteMask) deleteMask = snapshot.deleteMask.slice();
+        deleteMask[maskIndex] = nextMask;
+        changed = true;
+      }
+
+      if (snapshot.protectMask[maskIndex] === 255) {
+        let differs = false;
+        for (let channel = 0; channel < 4; channel += 1) {
+          if (working[offset + channel] !== snapshot.base.data[offset + channel]) differs = true;
+        }
+        if (differs) {
+          if (working === snapshot.working.data) working = snapshot.working.data.slice();
+          for (let channel = 0; channel < 4; channel += 1) working[offset + channel] = snapshot.base.data[offset + channel];
+          changed = true;
+        }
+        continue;
+      }
+
+      const newCoverage = (nextMask - previousMask) / 255;
+      const amount = newCoverage * (1 - snapshot.protectMask[maskIndex] / 255);
+      if (amount <= 0) continue;
+      let differs = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const next = Math.round(snapshot.working.data[offset + channel] * (1 - amount) + 255 * amount);
+        if (next !== snapshot.working.data[offset + channel]) differs = true;
+      }
+      if (differs) {
+        if (working === snapshot.working.data) working = snapshot.working.data.slice();
+        for (let channel = 0; channel < 4; channel += 1) {
+          working[offset + channel] = Math.round(snapshot.working.data[offset + channel] * (1 - amount) + 255 * amount);
+        }
+        changed = true;
+      }
+    }
+    progress?.(gridHeight * 2 + y + 1, total);
+  }
+
+  if (!changed) {
+    progress?.(total, total);
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    working: working === snapshot.working.data ? snapshot.working : { ...snapshot.working, data: working },
+    deleteMask,
+    workVersion: snapshot.workVersion + 1,
+  };
+}

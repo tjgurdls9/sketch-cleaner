@@ -1,5 +1,13 @@
 # UI handoff
 
+## 0.2 automatic draft
+
+New-photo creation alone starts auto-clean through the existing Worker. Saved-project opening stays idle. Changed results use one history commit; no-op/cancel leaves the saved version unchanged. The edit panel foregrounds direct correction and result saving; background fill/tone and manual ChatGPT remain optional. DOM checks cover these states, alpha compositing, masks, affine candidate overlay, existing editing and export.
+
+The scalar canvas loop avoids per-pixel objects/arrays. A warmed 12-frame jsdom/Canvas-mock comparison at 1200×800 with a 5000×4000 image measured median DPR1 16.2→7.9ms and DPR2 59→30.2ms. This excludes actual GPU/Windows interaction and is not a user-PC performance guarantee. The temporary benchmark was removed; pixel-output regression checks remain.
+
+Below is the earlier manual-editor handoff.
+
 The renderer is a vanilla TypeScript and Canvas2D Korean clothing-drafting workbench. It uses the `window.desktop` bridge from shared types, a separate stylesheet, and the engine worker for full-image operations. The interface includes file open/drop and recent projects, crop/rotation, delete/protect/unselect/restore/lasso tools, local fill/tone previews, autosave and retry, request preparation and manual ChatGPT handoff, candidate comparison/alignment/application, stale-basis fork, project save-as, and full-resolution PNG export. Candidate readiness displays request/current work-version differences while gating application only on basis-version mismatch. Transparency previews composite over white; side-by-side review shares zoom and pan.
 
 Save As writes the current in-memory snapshot to a newly chosen project destination even when the original destination has failed. Autosave is paused while the picker is active and resumes against the original project if the picker is cancelled or the copy fails. Successful Save As switches to the clean copy and clears the old destination error. Project opens fetch recent projects before asking to replace the current one; edit revision, project identity, and a project epoch guard delayed bridge and worker results so edits made during an open, fork, or save operation are not discarded. Worker results reuse the existing immutable base buffer when the basis is unchanged, and unchanged work versions do not create empty undo/save entries.

@@ -1,4 +1,5 @@
 import { MAX_PIXELS, type Pixels, type Snapshot } from '../shared/types';
+import { autoCleanDraft } from './automatic';
 
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -20,7 +21,8 @@ export type PixelJob =
   | { type: 'rotate'; snapshot: Snapshot; degrees: number }
   | { type: 'crop'; snapshot: Snapshot; rect: Rect }
   | { type: 'fill'; snapshot: Snapshot; fill: Fill }
-  | { type: 'adjust'; snapshot: Snapshot; adjustment: Tone };
+  | { type: 'adjust'; snapshot: Snapshot; adjustment: Tone }
+  | { type: 'auto-clean'; snapshot: Snapshot };
 
 export interface History {
   past: Snapshot[];
@@ -627,6 +629,9 @@ export function runPixelJob(job: PixelJob, progress?: PixelProgress): Pixels | S
     case 'crop': return cropBasis(job.snapshot, job.rect, progress);
     case 'fill': return fillSelection(job.snapshot, job.fill, progress);
     case 'adjust': return adjustSelection(job.snapshot, job.adjustment, progress);
+    case 'auto-clean':
+      validateSnapshot(job.snapshot);
+      return autoCleanDraft(job.snapshot, progress);
     default: throw new TypeError('Unsupported pixel job');
   }
 }

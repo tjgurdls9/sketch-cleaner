@@ -15,6 +15,7 @@ import { candidateReadiness, fitCandidateTransform } from './state';
 type Tool = 'delete' | 'protect' | 'unselect' | 'restore' | 'lasso' | 'pan' | 'crop' | 'sample';
 type Panel = 'edit' | 'request' | 'review' | 'export';
 type CompareMode = 'side' | 'overlay';
+type AutoCleanStatus = 'idle' | 'running' | 'complete' | 'unchanged' | 'cancelled' | 'failed';
 
 interface AppState {
   project: Project | null;
@@ -49,6 +50,7 @@ interface AppState {
   dirty: boolean;
   saveFailed: boolean;
   exportResult: ExportResult | null;
+  autoCleanStatus: AutoCleanStatus;
 }
 
 const state: AppState = {
@@ -61,7 +63,7 @@ const state: AppState = {
   sampledColor: null, sampledPoint: null, brightness: 0, contrast: 0,
   adjustmentPreview: null, cropRect: null, fineRotation: 0,
   view: { zoom: 1, panX: 0, panY: 0 }, dirty: false,
-  saveFailed: false, exportResult: null,
+  saveFailed: false, exportResult: null, autoCleanStatus: 'idle',
 };
 
 const $ = <T extends Element = HTMLElement>(selector: string): T => {
@@ -295,6 +297,8 @@ function setProject(project: Project): void {
   state.history = createHistory(project.snapshot);
   state.panel = 'edit';
   state.tool = 'delete';
+  state.showMasks = true;
+  state.autoCleanStatus = 'idle';
   state.compareMode = 'side';
   state.candidateScale = 1;
   state.candidateRotation = 0;
@@ -313,6 +317,7 @@ function setProject(project: Project): void {
   state.dirty = false;
   state.saveFailed = false;
   state.exportResult = null;
+  $('#maskToggleButton').setAttribute('aria-pressed', 'true');
   editRevision = 0;
   fitView();
   renderHeader();
@@ -536,17 +541,6 @@ function candidateTransform(): Affine {
   );
 }
 
-function candidateAtBasePoint(point: Point, transform: Affine): Point | null {
-  const determinant = transform.a * transform.d - transform.b * transform.c;
-  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-8) return null;
-  const x = point.x - transform.e;
-  const y = point.y - transform.f;
-  return {
-    x: (transform.d * x - transform.c * y) / determinant,
-    y: (transform.a * y - transform.b * x) / determinant,
-  };
-}
-
 function renderCanvas(): void {
   const bounds = stage.getBoundingClientRect();
   const cssWidth = Math.max(1, Math.floor(bounds.width));
@@ -572,59 +566,77 @@ function renderCanvas(): void {
   const transform = review && state.compareMode === 'overlay' ? candidateTransform() : null;
   const determinant = transform ? transform.a * transform.d - transform.b * transform.c : 1;
   const halfWidth = cssWidth / 2;
+  const sideBySide = Boolean(review && state.compareMode === 'side');
+  const zoom = state.view.zoom;
+  const sideLeft = (source: Pixels, slotX: number): number => slotX + (halfWidth - source.width * zoom) / 2 + state.view.panX;
+  const sideTop = (source: Pixels): number => (cssHeight - source.height * zoom) / 2 + state.view.panY;
+  const baseLeft = sideBySide ? sideLeft(snapshot!.base, 0) : 0;
+  const candidate = review ? state.candidate!.pixels : null;
+  const candidateLeft = sideBySide && candidate ? sideLeft(candidate, halfWidth) : 0;
+  const baseTop = sideBySide ? sideTop(snapshot!.base) : 0;
+  const candidateTop = sideBySide && candidate ? sideTop(candidate) : 0;
+  const overlayReady = Boolean(review && transform && Number.isFinite(determinant) && Math.abs(determinant) > 1e-8);
   for (let py = 0; py < height; py += 1) {
     const screenY = (py + 0.5) / pixelRatio;
+    const imageY = sideBySide ? (screenY - baseTop) / zoom : (screenY - state.view.panY) / zoom;
+    const iy = Math.floor(imageY);
     for (let px = 0; px < width; px += 1) {
-      const screenX = (px + 0.5) / pixelRatio;
-      let color: [number, number, number, number] | null = null;
-      let maskPoint: Point | null = null;
+      const target = (py * width + px) * 4;
       if (!base || !snapshot) {
-        color = [235, 239, 237, 255];
-      } else if (review && state.compareMode === 'side') {
-        const onBase = screenX < halfWidth;
-        const source = onBase ? snapshot.base : state.candidate!.pixels;
-        const slotX = onBase ? 0 : halfWidth;
-        const slotWidth = halfWidth;
-        const zoom = state.view.zoom;
-        const left = slotX + (slotWidth - source.width * zoom) / 2 + state.view.panX;
-        const top = (cssHeight - source.height * zoom) / 2 + state.view.panY;
-        const point = { x: (screenX - left) / zoom, y: (screenY - top) / zoom };
-        color = sample(source, point.x, point.y) ?? [234, 238, 236, 255];
-        if (onBase) maskPoint = point;
-      } else {
-        const point = viewToImage({ x: screenX, y: screenY }, state.view);
-        color = sample(base, point.x, point.y) ?? [234, 238, 236, 255];
-        maskPoint = point;
-        if (review && transform && Math.abs(determinant) > 1e-8) {
-          const candidatePoint = candidateAtBasePoint(point, transform);
-          const candidateColor = candidatePoint ? sample(state.candidate!.pixels, candidatePoint.x, candidatePoint.y) : null;
-          if (candidateColor) {
-            const baseAlpha = color[3] / 255;
-            const candidateAlpha = candidateColor[3] / 255;
-            color = [
-              Math.round((color[0] * baseAlpha + 255 * (1 - baseAlpha)) * 0.5 + (candidateColor[0] * candidateAlpha + 255 * (1 - candidateAlpha)) * 0.5),
-              Math.round((color[1] * baseAlpha + 255 * (1 - baseAlpha)) * 0.5 + (candidateColor[1] * candidateAlpha + 255 * (1 - candidateAlpha)) * 0.5),
-              Math.round((color[2] * baseAlpha + 255 * (1 - baseAlpha)) * 0.5 + (candidateColor[2] * candidateAlpha + 255 * (1 - candidateAlpha)) * 0.5), 255,
-            ];
-          }
+        image.data[target] = 235; image.data[target + 1] = 239; image.data[target + 2] = 237; image.data[target + 3] = 255;
+        continue;
+      }
+      const screenX = (px + 0.5) / pixelRatio;
+      const onBase = sideBySide && screenX < halfWidth;
+      const source = sideBySide ? (onBase ? snapshot.base : candidate!) : base;
+      const sourceY = sideBySide ? (screenY - (onBase ? baseTop : candidateTop)) / zoom : imageY;
+      const imageX = sideBySide
+        ? (screenX - (onBase ? baseLeft : candidateLeft)) / zoom
+        : (screenX - state.view.panX) / zoom;
+      const ix = Math.floor(imageX);
+      const sourceYIndex = Math.floor(sourceY);
+      const inSource = ix >= 0 && sourceYIndex >= 0 && ix < source.width && sourceYIndex < source.height;
+      const sourceOffset = inSource ? (sourceYIndex * source.width + ix) * 4 : -1;
+      let red = inSource ? source.data[sourceOffset] : 234;
+      let green = inSource ? source.data[sourceOffset + 1] : 238;
+      let blue = inSource ? source.data[sourceOffset + 2] : 236;
+      let alpha = inSource ? source.data[sourceOffset + 3] / 255 : 1;
+      if (overlayReady && !sideBySide && transform && candidate) {
+        const dx = imageX - transform.e;
+        const dy = imageY - transform.f;
+        const candidateX = (transform.d * dx - transform.c * dy) / determinant;
+        const candidateY = (transform.a * dy - transform.b * dx) / determinant;
+        const cx = Math.floor(candidateX);
+        const cy = Math.floor(candidateY);
+        if (cx >= 0 && cy >= 0 && cx < candidate.width && cy < candidate.height) {
+          const candidateOffset = (cy * candidate.width + cx) * 4;
+          const baseAlpha = alpha;
+          const candidateAlpha = candidate.data[candidateOffset + 3] / 255;
+          red = Math.round((red * baseAlpha + 255 * (1 - baseAlpha)) * 0.5 + (candidate.data[candidateOffset] * candidateAlpha + 255 * (1 - candidateAlpha)) * 0.5);
+          green = Math.round((green * baseAlpha + 255 * (1 - baseAlpha)) * 0.5 + (candidate.data[candidateOffset + 1] * candidateAlpha + 255 * (1 - candidateAlpha)) * 0.5);
+          blue = Math.round((blue * baseAlpha + 255 * (1 - baseAlpha)) * 0.5 + (candidate.data[candidateOffset + 2] * candidateAlpha + 255 * (1 - candidateAlpha)) * 0.5);
+          alpha = 1;
         }
       }
-      const target = (py * width + px) * 4;
-      const alpha = color[3] / 255;
-      image.data[target] = Math.round(color[0] * alpha + 255 * (1 - alpha));
-      image.data[target + 1] = Math.round(color[1] * alpha + 255 * (1 - alpha));
-      image.data[target + 2] = Math.round(color[2] * alpha + 255 * (1 - alpha));
+      image.data[target] = Math.round(red * alpha + 255 * (1 - alpha));
+      image.data[target + 1] = Math.round(green * alpha + 255 * (1 - alpha));
+      image.data[target + 2] = Math.round(blue * alpha + 255 * (1 - alpha));
       image.data[target + 3] = 255;
-      if (state.showMasks && snapshot && maskPoint && maskPoint.x >= 0 && maskPoint.y >= 0 && maskPoint.x < snapshot.working.width && maskPoint.y < snapshot.working.height) {
-        const maskIndex = (Math.floor(maskPoint.y) * snapshot.working.width) + Math.floor(maskPoint.x);
-        const protect = snapshot.protectMask[maskIndex] / 255;
-        const remove = snapshot.deleteMask[maskIndex] / 255;
-        const weight = Math.max(protect, remove) * 0.36;
-        if (weight > 0) {
-          const overlay = protect > 0 ? [67, 122, 157] : [200, 83, 69];
-          image.data[target] = Math.round(image.data[target] * (1 - weight) + overlay[0] * weight);
-          image.data[target + 1] = Math.round(image.data[target + 1] * (1 - weight) + overlay[1] * weight);
-          image.data[target + 2] = Math.round(image.data[target + 2] * (1 - weight) + overlay[2] * weight);
+      const drawMask = !sideBySide || onBase;
+      if (state.showMasks && snapshot && drawMask) {
+        if (imageX >= 0 && imageY >= 0 && imageX < snapshot.working.width && imageY < snapshot.working.height) {
+          const maskIndex = (iy * snapshot.working.width) + ix;
+          const protect = snapshot.protectMask[maskIndex] / 255;
+          const remove = snapshot.deleteMask[maskIndex] / 255;
+          const weight = Math.max(protect, remove) * 0.36;
+          if (weight > 0) {
+            const overlayRed = protect > 0 ? 67 : 200;
+            const overlayGreen = protect > 0 ? 122 : 83;
+            const overlayBlue = protect > 0 ? 157 : 69;
+            image.data[target] = Math.round(image.data[target] * (1 - weight) + overlayRed * weight);
+            image.data[target + 1] = Math.round(image.data[target + 1] * (1 - weight) + overlayGreen * weight);
+            image.data[target + 2] = Math.round(image.data[target + 2] * (1 - weight) + overlayBlue * weight);
+          }
         }
       }
     }
@@ -893,6 +905,53 @@ function pointerUp(event: PointerEvent): void {
   }
 }
 
+function syncMaskToggle(): void {
+  $('#maskToggleButton').setAttribute('aria-pressed', String(state.showMasks));
+}
+
+async function runAutomaticCleanup(): Promise<void> {
+  const snapshot = state.snapshot;
+  if (!snapshot || !state.project) return;
+  const token = captureEditToken(snapshot);
+  const previousMaskVisibility = state.showMasks;
+  state.autoCleanStatus = 'running';
+  renderInspector();
+  announce('자동 정리를 시작했습니다. 진행률은 캔버스에서 확인할 수 있습니다.');
+  try {
+    const next = await runPixelJob({ type: 'auto-clean', snapshot }, '분리된 주변 표시를 자동으로 정리하고 있습니다') as Snapshot;
+    if (!isEditTokenCurrent(token)) return;
+    if (next.workVersion === snapshot.workVersion) {
+      state.showMasks = false;
+      syncMaskToggle();
+      state.autoCleanStatus = 'unchanged';
+      renderCanvas();
+      renderInspector();
+      announce('자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.');
+      return;
+    }
+    state.showMasks = false;
+    syncMaskToggle();
+    state.autoCleanStatus = 'complete';
+    if (!commitWorkerSnapshot(next, token)) return;
+    announce('자동 정리가 끝났습니다. 결과를 확인하고 필요한 곳을 직접 수정하세요.');
+  } catch (error) {
+    if (!isEditTokenCurrent(token)) return;
+    state.showMasks = previousMaskVisibility;
+    syncMaskToggle();
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      state.autoCleanStatus = 'cancelled';
+      renderCanvas();
+      renderInspector();
+      announce('자동 정리를 취소했습니다. 사진은 유지되어 직접 수정할 수 있습니다.');
+    } else {
+      state.autoCleanStatus = 'failed';
+      renderCanvas();
+      renderInspector();
+      showError(safeTextError(error, '자동 정리를 마치지 못했습니다. 사진은 유지되어 직접 수정할 수 있습니다.'));
+    }
+  }
+}
+
 async function openImported(image: ImportedImage, openingRevision: number): Promise<void> {
   const pixels = image.pixels;
   if (!Number.isInteger(pixels.width) || !Number.isInteger(pixels.height) || pixels.width < 1 || pixels.height < 1 || pixels.width * pixels.height > MAX_PIXELS || pixels.data.length !== pixels.width * pixels.height * 4) {
@@ -918,6 +977,10 @@ async function openImported(image: ImportedImage, openingRevision: number): Prom
   }
   state.imported = image;
   setProject(project);
+  state.showMasks = false;
+  syncMaskToggle();
+  renderCanvas();
+  void runAutomaticCleanup();
   await refreshRecent();
 }
 
@@ -1048,6 +1111,10 @@ async function rotate(degrees: number): Promise<void> {
 
 function setTool(tool: Tool): void {
   state.tool = tool;
+  if (['delete', 'protect', 'unselect', 'restore', 'lasso'].includes(tool)) {
+    state.showMasks = true;
+    syncMaskToggle();
+  }
   document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(button => {
     const active = button.dataset.tool === tool;
     button.classList.toggle('active', active);
@@ -1092,6 +1159,19 @@ function selectPanelTab(panel: Panel): void {
   });
 }
 
+function autoCleanDescription(): string {
+  const messages: Record<AutoCleanStatus, { title: string; detail: string }> = {
+    idle: { title: '자동 정리 결과를 확인하세요', detail: '자동 정리를 다시 실행하거나 도구를 골라 직접 수정할 수 있습니다.' },
+    running: { title: '자동 정리 중입니다', detail: '분리된 주변 표시를 확인합니다. 취소해도 사진은 유지됩니다.' },
+    complete: { title: '자동 정리를 적용했습니다', detail: '결과 선을 살펴보고 필요한 곳은 직접 수정하세요.' },
+    unchanged: { title: '', detail: '자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.' },
+    cancelled: { title: '자동 정리를 취소했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
+    failed: { title: '자동 정리를 마치지 못했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
+  };
+  const { title, detail } = messages[state.autoCleanStatus];
+  return title ? `<strong>${title}</strong><span>${detail}</span>` : `<span>${detail}</span>`;
+}
+
 function renderInspector(): void {
   const project = state.project;
   const hasImage = Boolean(state.snapshot);
@@ -1102,28 +1182,39 @@ function renderInspector(): void {
 
   if (state.panel === 'edit') {
     inspector.innerHTML = hasImage ? `
-      <h2 class="panel-heading">선택한 곳만 정리</h2>
-      <p class="panel-intro">삭제 표시가 있는 곳에만 편집을 적용합니다. 보호 표시가 겹친 픽셀은 작업 기준 그대로 남습니다.</p>
+      <h2 class="panel-heading">사진 정리 결과</h2>
+      <p class="panel-intro">사진을 열면 분리된 주변 표시부터 정리합니다. 선과 겹치거나 판단이 어려운 곳은 결과를 확인해 직접 고쳐 주세요.</p>
       <section class="panel-block">
-        <h3>선택 범위</h3>
+        <h3>자동 정리</h3>
+        <div id="autoCleanStatus" class="auto-clean-status" data-state="${state.autoCleanStatus}" role="status" aria-live="polite">${autoCleanDescription()}</div>
+        <button class="button button-primary wide-button" type="button" data-action="auto-clean">자동 정리 다시 하기</button>
+        <button class="small-button small-button-accent wide-button result-save-action" type="button" data-action="go-export">결과 확인 및 저장</button>
+      </section>
+      <section class="panel-block">
+        <h3>직접 수정</h3>
+        <p class="muted-copy">삭제 표시 도구로 지울 곳을 칠한 다음 <strong>칠한 곳 지우기</strong>를 누르세요. 보호 표시와 기준 복원 도구로 도해 선을 지킬 수 있습니다.</p>
         <div class="button-row"><button id="selectAllButton" class="small-button" type="button" data-action="select-all">전체 선택</button><button class="small-button" type="button" data-action="clear-selection">선택 범위 지우기</button></div>
-        <p class="muted-copy">전체 밝기 조정이나 채우기는 전체 선택을 눌렀을 때만 사진 전체에 적용됩니다.</p>
+        <button class="button button-quiet wide-button" type="button" data-action="fill-white">칠한 곳 지우기</button>
+        <p class="muted-copy">전체를 지우려면 전체 선택을 누른 뒤 실행하세요. 선택 범위 밖과 보호한 픽셀은 유지됩니다.</p>
       </section>
-      <section class="panel-block">
-        <h3>선택 영역 채우기</h3>
-        <div class="button-row"><button class="small-button" type="button" data-action="fill-white">흰색으로 채우기</button><button class="small-button" type="button" data-action="sample-color">배경색 찍기</button></div>
+      <details class="advanced-block">
+        <summary>배경색 채우기</summary>
+        <div class="advanced-content">
+          <div class="button-row"><button class="small-button" type="button" data-action="sample-color">배경색 찍기</button><button class="button button-quiet" type="button" data-action="fill-sample" ${state.sampledColor ? '' : 'disabled'}>찍은 색으로 채우기</button></div>
         <div class="control-row"><span>찍은 배경색</span><span><canvas id="sampledColorSwatch" class="color-sample" width="18" height="18" aria-hidden="true"></canvas><span id="sampledColorText">아직 선택하지 않음</span></span></div>
-        <button class="button button-quiet wide-button" type="button" data-action="fill-sample" ${state.sampledColor ? '' : 'disabled'}>찍은 색으로 채우기</button>
         <p class="muted-copy">선택 범위 밖의 픽셀은 그대로 유지됩니다.</p>
-      </section>
-      <section class="panel-block">
-        <h3>종이색과 그림자 미리보기</h3>
+        </div>
+      </details>
+      <details class="advanced-block">
+        <summary>고급 보정 · 밝기와 대비</summary>
+        <div class="advanced-content">
         <label class="control-row" for="brightness"><span>밝기</span><input id="brightness" type="range" min="-100" max="100" value="${state.brightness}" /><output id="brightnessOutput">${state.brightness}</output></label>
         <label class="control-row" for="contrast"><span>대비</span><input id="contrast" type="range" min="-100" max="100" value="${state.contrast}" /><output id="contrastOutput">${state.contrast}</output></label>
         <div class="button-row"><button class="small-button small-button-accent" type="button" data-action="preview-adjust">미리보기</button><button class="small-button" type="button" data-action="apply-adjust" ${state.adjustmentPreview ? '' : 'disabled'}>적용</button><button class="small-button" type="button" data-action="cancel-adjust" ${state.adjustmentPreview ? '' : 'disabled'}>취소</button></div>
         <p class="muted-copy">미리보기는 적용을 누를 때까지 작업에 저장되지 않습니다. 전체 적용은 전체를 선택했을 때만 가능합니다.</p>
-      </section>
-  <div class="notice">글씨와 도해 선이 겹친 부분은 자동으로 정확히 복원되지 않습니다. 100% 확대에서 결과 선을 확인해 주세요.</div>
+        </div>
+      </details>
+      <div class="notice">글씨와 도해 선이 겹친 부분은 자동으로 복원하기 어려울 수 있습니다. 100% 확대에서 결과 선을 확인해 주세요.</div>
       ${state.history?.truncated ? '<div class="notice warning-copy">큰 이미지라 오래된 실행 취소 기록 일부를 정리했습니다. 바로 이전 상태는 계속 취소할 수 있습니다.</div>' : ''}` : noProject;
   } else if (state.panel === 'request') {
     inspector.innerHTML = project ? `
@@ -1457,6 +1548,8 @@ async function openProjectFolder(requestId?: string): Promise<void> {
 async function panelAction(action: string, target: HTMLElement): Promise<void> {
   clearError();
   switch (action) {
+    case 'auto-clean': await runAutomaticCleanup(); break;
+    case 'go-export': setPanel('export'); break;
     case 'fill-white': await fillCurrentSelection({ kind: 'white' }); break;
     case 'fill-sample': if (state.sampledPoint) await fillCurrentSelection({ kind: 'sample', point: state.sampledPoint }); break;
     case 'select-all': await setWholeImageSelection(true); break;
@@ -1650,7 +1743,7 @@ function bindEvents(): void {
   $('#zoom100Button').addEventListener('click', () => zoomAt(1));
   $('#maskToggleButton').addEventListener('click', () => {
     state.showMasks = !state.showMasks;
-    $('#maskToggleButton').setAttribute('aria-pressed', String(state.showMasks));
+    syncMaskToggle();
     renderCanvas();
   });
   $('#cancelJobButton').addEventListener('click', cancelWorker);

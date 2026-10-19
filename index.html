@@ -133,7 +133,7 @@
                 </div>
                 <p class="eyebrow">의류 도해 작업대</p>
                 <h1>정리할 작업 사진을 여세요</h1>
-                <p class="empty-description">도해 선은 보호하고, 지울 곳은 직접 표시해 정리합니다.</p>
+                <p class="empty-description">사진을 열면 자동 정리합니다. 필요한 곳만 직접 고치고 저장하세요.</p>
                 <button id="emptyOpenButton" class="button button-primary" type="button">사진 불러오기</button>
                 <p class="drop-hint">JPEG 또는 PNG를 이곳에 끌어다 놓으세요</p>
               </div>
@@ -155,11 +155,11 @@
         </section>
 
         <aside class="inspector" aria-label="작업 단계">
-          <nav class="inspector-tabs" role="tablist" aria-label="편집, 요청, 검수, 저장">
-            <button id="tabEdit" class="inspector-tab active" type="button" role="tab" aria-selected="true" data-panel="edit">편집</button>
-            <button id="tabRequest" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="request">요청</button>
-            <button id="tabReview" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="review">검수</button>
+          <nav class="inspector-tabs" role="tablist" aria-label="정리와 저장, 선택적 ChatGPT 요청과 검수">
+            <button id="tabEdit" class="inspector-tab active" type="button" role="tab" aria-selected="true" data-panel="edit">정리</button>
             <button id="tabExport" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="export">저장</button>
+            <button id="tabRequest" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="request">요청(선택)</button>
+            <button id="tabReview" class="inspector-tab" type="button" role="tab" aria-selected="false" data-panel="review">검수(선택)</button>
           </nav>
           <div id="inspectorContent" class="inspector-content"></div>
         </aside>

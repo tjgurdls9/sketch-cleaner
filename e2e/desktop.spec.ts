@@ -1,9 +1,10 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { AUTOMATIC_FIXTURE, makeAutomaticFixture } from '../tests/automatic-fixture';
 
 async function imageScreenPoint(page: import('@playwright/test').Page, x: number, y: number, width: number, height: number): Promise<{ x: number; y: number }> {
   const bounds = await page.locator('#stage').boundingBox();
@@ -48,11 +49,25 @@ test('desktop local editing, manual request round-trip and durable recovery', as
     }, sourcePath);
     await page.locator('#emptyOpenButton').click();
     await expect(page.locator('#imageDimensions')).toContainText('480');
+    await expect(page.locator('#autoCleanStatus')).toHaveAttribute('data-state', 'unchanged');
+    const unchanged = await page.evaluate(async () => {
+      const recent = await window.desktop.listRecent();
+      if (!recent.ok || !recent.value[0]) throw new Error('가져온 프로젝트가 없습니다.');
+      const reopened = await window.desktop.openRecent(recent.value[0].id);
+      if (!reopened.ok) throw new Error(reopened.error);
+      return { workVersion: reopened.value.snapshot.workVersion, pixel: [...reopened.value.snapshot.working.data.slice(0, 4)] };
+    });
+    expect(unchanged).toEqual({ workVersion: 0, pixel: [190, 180, 170, 255] });
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 540));
+    await expect(page.locator('#tabEdit')).toBeVisible();
+    await expect(page.getByRole('button', { name: '칠한 곳 지우기', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '결과 확인 및 저장', exact: true })).toBeVisible();
+    const colorFill = page.locator('details.advanced-block').first();
+    await colorFill.locator('summary').click();
     await expect(page.getByRole('button', { name: '찍은 색으로 채우기', exact: true })).toBeVisible();
     await expect(page.locator('#zoom100Button')).toBeVisible();
     await page.getByRole('button', { name: '전체 선택', exact: true }).click();
-    await page.getByRole('button', { name: '흰색으로 채우기', exact: true }).click();
+    await page.getByRole('button', { name: '칠한 곳 지우기', exact: true }).click();
     await expect(page.locator('#saveState')).toContainText('저장됨');
     const local = await page.evaluate(async () => {
       const recent = await window.desktop.listRecent();
@@ -146,6 +161,197 @@ test('desktop local editing, manual request round-trip and durable recovery', as
     expect(security).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false });
     expect(pageErrors).toEqual([]);
     await page.screenshot({ path: path.join('test-results', 'workbench.png') });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen persist', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sketch-automatic-desktop-'));
+  const sourcePath = path.join(root, 'synthetic-garment.png');
+  const sourceBytes = await makeAutomaticFixture();
+  await writeFile(sourcePath, sourceBytes);
+  const sourceHash = createHash('sha256').update(await readFile(sourcePath)).digest('hex');
+  const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
+  const executablePath = process.env.SKETCH_TEST_EXECUTABLE;
+  const launch = () => electron.launch({
+    executablePath,
+    args: [...(executablePath ? [] : ['.']), `--user-data-dir=${path.join(root, 'profile')}`], env,
+  });
+  let app = await launch();
+  try {
+    let page = await app.firstWindow();
+    const pageErrors: string[] = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await expect(page.getByRole('heading', { name: '정리할 작업 사진을 여세요' })).toBeVisible();
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showOpenDialog', { configurable: true, value: async () => ({ canceled: false, filePaths: [filePath] }) });
+    }, sourcePath);
+    await page.locator('#emptyOpenButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText(String(AUTOMATIC_FIXTURE.width));
+    const automaticStatus = page.locator('#autoCleanStatus');
+    await expect(automaticStatus).toHaveAttribute('data-state', 'complete');
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+
+    const reopen = async () => page.evaluate(async () => {
+      const recent = await window.desktop.listRecent();
+      if (!recent.ok || !recent.value[0]) throw new Error('자동 정리 프로젝트가 저장되지 않았습니다.');
+      const opened = await window.desktop.openRecent(recent.value[0].id);
+      if (!opened.ok) throw new Error(opened.error);
+      return { id: opened.value.id, folder: opened.value.folder, workVersion: opened.value.snapshot.workVersion };
+    });
+    const readPersisted = async () => {
+      const project = await reopen();
+      const manifest = JSON.parse(await readFile(path.join(project.folder, 'project.json'), 'utf8')) as { currentRevision: string };
+      const revision = path.join(project.folder, 'revisions', manifest.currentRevision);
+      const image = await sharp(await readFile(path.join(revision, 'working.png'))).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      const deleteMasks = await sharp(await readFile(path.join(revision, 'delete-mask.png'))).greyscale().raw().toBuffer({ resolveWithObject: true });
+      const protectMasks = await sharp(await readFile(path.join(revision, 'protect-mask.png'))).greyscale().raw().toBuffer({ resolveWithObject: true });
+      const pixelAt = (x: number, y: number): number[] => [...image.data.subarray((y * image.info.width + x) * 4, (y * image.info.width + x) * 4 + 4)];
+      return {
+        ...project,
+        pixelAt,
+        deleteAt: (x: number, y: number) => deleteMasks.data[y * deleteMasks.info.width + x],
+        protectAt: (x: number, y: number) => protectMasks.data[y * protectMasks.info.width + x],
+      };
+    };
+
+    let cleaned = await readPersisted();
+    expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([255, 255, 255, 255]);
+    expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.exteriorGlyph.x, AUTOMATIC_FIXTURE.exteriorGlyph.y)).toEqual([255, 255, 255, 255]);
+    expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.exteriorTable.x, AUTOMATIC_FIXTURE.exteriorTable.y)).toEqual([255, 255, 255, 255]);
+    const seamBefore = cleaned.pixelAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y);
+    expect(seamBefore[0]).toBeLessThan(100);
+    expect(seamBefore[1]).toBeLessThan(100);
+    const detailBefore = cleaned.pixelAt(AUTOMATIC_FIXTURE.garmentDetail.x, AUTOMATIC_FIXTURE.garmentDetail.y);
+    expect(detailBefore[0]).toBeLessThan(100);
+    expect(cleaned.protectAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toBe(0);
+
+    await page.locator('#undoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    const autoUndo = await readPersisted();
+    expect(autoUndo.pixelAt(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([245, 24, 22, 255]);
+    await page.locator('#redoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    cleaned = await readPersisted();
+    expect(cleaned.pixelAt(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([255, 255, 255, 255]);
+
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
+    await page.locator('#zoomReadout').click();
+    await page.locator('#zoom100Button').click();
+    await expect(page.locator('#zoomReadout')).toHaveText('100%');
+    await page.locator('#tabEdit').click();
+    await page.locator('[data-tool="delete"]').click();
+    await page.locator('#brushSize').evaluate(element => {
+      (element as HTMLInputElement).value = '3';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const manualFillPoint = await imageScreenPoint(page, AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y, AUTOMATIC_FIXTURE.width, AUTOMATIC_FIXTURE.height);
+    await page.mouse.move(manualFillPoint.x, manualFillPoint.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    const selected = await readPersisted();
+    const manualBefore = selected.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y);
+    expect(manualBefore).not.toEqual([255, 255, 255, 255]);
+    expect(selected.deleteAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: '칠한 곳 지우기', exact: true }).click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    let manuallyCleaned = await readPersisted();
+    expect(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
+
+    await page.locator('#undoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    const undoneFill = await readPersisted();
+    expect(undoneFill.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual(manualBefore);
+    await page.locator('#redoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    manuallyCleaned = await readPersisted();
+    expect(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
+
+    await page.locator('[data-tool="protect"]').click();
+    await page.locator('#brushSize').evaluate(element => {
+      (element as HTMLInputElement).value = '4';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const seamPoint = await imageScreenPoint(page, AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y, AUTOMATIC_FIXTURE.width, AUTOMATIC_FIXTURE.height);
+    await page.mouse.move(seamPoint.x, seamPoint.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    expect((await readPersisted()).protectAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toBe(255);
+
+    await page.locator('#undoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    expect((await readPersisted()).protectAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toBe(0);
+    await page.locator('#redoButton').click();
+    await expect(page.locator('#processingOverlay')).toBeHidden();
+    await page.locator('#saveProjectButton').click();
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    const reopened = await readPersisted();
+    expect(reopened.protectAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toBe(255);
+    expect(reopened.pixelAt(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toEqual(seamBefore);
+    expect(createHash('sha256').update(await readFile(sourcePath)).digest('hex')).toBe(sourceHash);
+
+    const exportedPath = path.join(root, 'automatic-cleaned.png');
+    await page.locator('#tabExport').click();
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showSaveDialog', { configurable: true, value: async () => ({ canceled: false, filePath }) });
+    }, exportedPath);
+    await page.getByRole('button', { name: 'PNG 저장', exact: true }).click();
+    await expect(page.locator('#inspectorContent')).toContainText('저장 완료');
+    const exported = await sharp(await readFile(exportedPath)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const outputPixel = (x: number, y: number): number[] => [...exported.data.subarray((y * exported.info.width + x) * 4, (y * exported.info.width + x) * 4 + 4)];
+    expect([exported.info.width, exported.info.height]).toEqual([AUTOMATIC_FIXTURE.width, AUTOMATIC_FIXTURE.height]);
+    expect(outputPixel(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([255, 255, 255, 255]);
+    expect(outputPixel(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toEqual(seamBefore);
+    expect(outputPixel(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
+
+    const savedVersion = reopened.workVersion;
+    const savedProjectId = reopened.id;
+    await app.close();
+    app = await launch();
+    page = await app.firstWindow();
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await expect(page.locator(`[data-recent-id="${savedProjectId}"]`)).toBeVisible();
+    await page.locator(`[data-recent-id="${savedProjectId}"]`).click();
+    await expect(page.locator('#autoCleanStatus')).toHaveAttribute('data-state', 'idle');
+    await expect(page.locator('#imageDimensions')).toContainText(String(AUTOMATIC_FIXTURE.width));
+    const reopenedInUi = await page.evaluate(async projectId => {
+      const result = await window.desktop.openRecent(projectId);
+      if (!result.ok) throw new Error(result.error);
+      const pixels = result.value.snapshot.working.data;
+      const offset = (x: number, y: number) => (y * result.value.snapshot.working.width + x) * 4;
+      return {
+        workVersion: result.value.snapshot.workVersion,
+        manualPixel: [...pixels.slice(offset(160, 260), offset(160, 260) + 4)],
+        arrowPixel: [...pixels.slice(offset(40, 100), offset(40, 100) + 4)],
+      };
+    }, savedProjectId);
+    expect(reopenedInUi.workVersion).toBe(savedVersion);
+    expect(reopenedInUi.manualPixel).toEqual([255, 255, 255, 255]);
+    expect(reopenedInUi.arrowPixel).toEqual([255, 255, 255, 255]);
+    await page.screenshot({ path: path.join('test-results', 'automatic-workbench.png') });
+    expect(pageErrors).toEqual([]);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
