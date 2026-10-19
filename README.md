@@ -1,6 +1,8 @@
 # Sketch Cleaner · 의류 도해 정리
 
-Windows 11 x64용 의류 작업지 편집 앱입니다. 지울 곳을 빨강으로, 남길 곳을 파랑으로 지정하고 선택한 곳에만 편집을 적용합니다. 원본은 별도로 보존합니다.
+Windows 11 x64용 의류 작업지 정리 앱입니다. **사진 선택 → 자동 정리 초안 → 직접 수정 → 확인·저장** 순서로 사용합니다. 원본은 별도로 보존합니다.
+
+0.2.0의 자동 처리는 사진의 큰 도해 선 묶음을 찾아 주변의 분리된 작은 표시·붉은 필기와 종이 배경을 보수적으로 정리합니다. 학습된 의류 인식 모델을 사용하지 않으며, 판단하기 어려우면 원본을 유지합니다. 도해와 겹친 글씨는 직접 수정해야 합니다. 실제 업무 사진의 품질은 아직 인수시험 전입니다.
 
 사용자는 Node, Python, 명령어, API 키를 준비하지 않습니다. 별도 AI 요금이나 서버는 없습니다. ChatGPT Plus는 사용자가 공식 웹사이트에서 직접 사용하며, 앱은 파일 준비와 결과 검수를 돕습니다. 사진을 직접 첨부할 때 외부 서버에서 처리됩니다.
 
@@ -14,7 +16,7 @@ Windows 11 x64용 의류 작업지 편집 앱입니다. 지울 곳을 빨강으�
 
 ## Windows 테스트 설치
 
-전달받은 ZIP의 압축을 풀고 `SketchCleaner-0.1.0-Setup.exe`를 실행한 뒤 시작 메뉴의 **Sketch Cleaner**를 엽니다. GitHub에서는 Actions의 검증된 `Windows test build` 실행 하단에 있는 `SketchCleaner-Windows-x64-TEST-unsigned` 파일로 제공합니다. Artifact 보관 기간은 14일입니다. 서명이 없는 테스트 설치 파일이므로 Windows 경고가 표시될 수 있습니다.
+전달받은 ZIP의 압축을 풀고 `SketchCleaner-0.2.0-Setup.exe`를 실행한 뒤 시작 메뉴의 **Sketch Cleaner**를 엽니다. GitHub 사용법은 필요하지 않습니다. GitHub에서는 Actions의 검증된 `Windows test build` 실행 하단에 있는 `SketchCleaner-Windows-x64-TEST-unsigned` 파일로 제공합니다. Artifact 보관 기간은 14일입니다. 서명이 없는 테스트 설치 파일이므로 Windows 경고가 표시될 수 있습니다.
 
 ## 개발자용
 

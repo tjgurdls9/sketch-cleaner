@@ -39,7 +39,8 @@ jobs:
           $marker = Join-Path $dataRoot "installer-preservation-check.txt"
           Set-Content $marker "Preserve projects across installation and removal" -NoNewline
           $markerHash = (Get-FileHash $marker -Algorithm SHA256).Hash
-          $setup = (Get-ChildItem out/make -Recurse -Filter "SketchCleaner-0.1.0-Setup.exe" | Select-Object -First 1).FullName
+          $version = node -p "require('./package.json').version"
+          $setup = (Get-ChildItem out/make -Recurse -Filter "SketchCleaner-$version-Setup.exe" | Select-Object -First 1).FullName
           if (!$setup) { throw "Installer missing" }
           $result = Start-Process $setup -ArgumentList "--silent" -Wait -PassThru
           if ($result.ExitCode -ne 0) { throw "Installer failed: $($result.ExitCode)" }

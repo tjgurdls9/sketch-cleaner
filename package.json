@@ -1,7 +1,7 @@
 {
   "name": "sketch-cleaner",
   "productName": "Sketch Cleaner",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "의류 도해 정리 · 로컬 편집 및 수동 ChatGPT 검수",
   "private": true,
   "main": "dist/main/main.js",
