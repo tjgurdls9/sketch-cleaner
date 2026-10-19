@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { decodeImage } from '../src/main/image';
-import { CHATGPT_URL, isTrustedSender, safeErrorMessage } from '../src/main/security';
+import { CHATGPT_URL, isTrustedSender, requireId, requireObject, safeErrorMessage } from '../src/main/security';
 
 describe('image import trust boundary', () => {
   it('applies JPEG EXIF orientation before returning editor pixels', async () => {
@@ -50,5 +50,12 @@ describe('Electron boundary helpers', () => {
     const error = new Error('/Users/private/Pictures/source.png: decoder internals');
     expect(safeErrorMessage(error)).not.toContain('/Users/private');
     expect(safeErrorMessage(error)).toMatch(/[가-힣]/);
+  });
+
+  it('rejects malformed IDs and non-object IPC records', () => {
+    expect(requireId('123e4567-e89b-42d3-a456-426614174000')).toBe('123e4567-e89b-42d3-a456-426614174000');
+    for (const invalid of ['../outside', '', null, 7]) expect(() => requireId(invalid)).toThrow(/[가-힣]/);
+    for (const invalid of [null, [], 'text', 4]) expect(() => requireObject(invalid)).toThrow(/[가-힣]/);
+    expect(() => requireObject({ safe: true })).not.toThrow();
   });
 });
