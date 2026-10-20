@@ -391,7 +391,11 @@ function piecesOnLoops(segments: readonly Segment[]): Set<Segment> {
   return new Set(segments.filter((_, edge) => !bridges.has(edge)));
 }
 
-export function findAnnotationInk(figure: FigureInk, width: number, height: number, stats?: MarkStats): Uint8Array {
+/**
+ * `kept`, when given, is set to 1 on the ink of the drawing lines that stay, so erasing a note can
+ * take in its soft edge without eating into them.
+ */
+export function findAnnotationInk(figure: FigureInk, width: number, height: number, stats?: MarkStats, kept?: Uint8Array): Uint8Array {
   const { ink, colored, text } = figure;
   const result = new Uint8Array(ink.length);
   const skeleton = thin(ink, width, height);
@@ -897,7 +901,10 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
   };
   for (const segment of segments) if (!marked.has(segment)) paint(segment, 1);
   for (const segment of marked) paint(segment, 255);
-  for (let index = 0; index < result.length; index += 1) if (result[index] !== 255) result[index] = 0;
+  for (let index = 0; index < result.length; index += 1) {
+    if (kept) kept[index] = result[index] === 1 ? 1 : 0;
+    if (result[index] !== 255) result[index] = 0;
+  }
   if (stats) { stats.strokeWidth = strokeWidth; stats.kept = keep.size; stats.candidates = marked.size; }
   return result;
 }
