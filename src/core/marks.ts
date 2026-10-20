@@ -481,8 +481,18 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     }
     return undefined;
   };
-  // Total length (in stroke widths) of the straight line a piece is part of.
+  // Total length (in stroke widths) of the straight line a piece is part of. The line graph does
+  // not change while judging, so each answer is kept: busy areas ask about the same pieces often.
+  const lineRuns = new Map<number, Map<Segment, number>>();
   const lineRunOf = (segment: Segment, angle = MARK_RULES.crossAngle): number => {
+    const known = lineRuns.get(angle)?.get(segment);
+    if (known !== undefined) return known;
+    const run = measureLineRun(segment, angle);
+    if (!lineRuns.has(angle)) lineRuns.set(angle, new Map());
+    lineRuns.get(angle)!.set(segment, run);
+    return run;
+  };
+  const measureLineRun = (segment: Segment, angle: number): number => {
     let total = segment.length;
     for (const start of segment.nodes) {
       let current = segment;
@@ -603,8 +613,9 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     // Only pieces fastened to the slash or to the seam count; writing beside a slash floats free.
     const fastened = (other: Segment): boolean => other.nodes.some(node => (atNode.get(node) ?? [])
       .some(peer => peer === piece || lineRunOf(peer, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun));
-    const extras = segments.filter(other => other !== piece && curly(other) && fastened(other)
-      && crossings.some(([x, y]) => near(other, x, y, radius)));
+    // Cheapest and most selective test first: only pieces near the slash can belong to it.
+    const extras = segments.filter(other => other !== piece && crossings.some(([x, y]) => near(other, x, y, radius))
+      && curly(other) && fastened(other));
     if (extras.reduce((sum, other) => sum + units(other), 0) < MARK_RULES.scissorExtra) continue;
     // Scissors carry a real curl or loop; short straight bits beside a slash (the corner of a
     // stitch line) do not make it a scissor mark.
