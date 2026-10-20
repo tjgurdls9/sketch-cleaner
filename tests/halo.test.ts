@@ -58,6 +58,17 @@ describe('taking in the soft edge of selected marks', () => {
     expect(grown[2 * width + 10]).toBe(0);
   });
 
+  it('measures the paper locally: a grey backdrop beside a white sheet is not a soft edge', () => {
+    const [width, height] = [160, 60];
+    const data = sheet(width, height);
+    for (let y = 0; y < height; y += 1) for (let x = 80; x < width; x += 1) paint(data, width, x, y, [110, 110, 112]);
+    const mask = new Uint8Array(width * height);
+    for (let x = 100; x < 140; x += 1) { paint(data, width, x, 30, [230, 40, 40]); mask[30 * width + x] = 255; }
+    const grown = growIntoHalo(data, width, height, mask, new Uint8Array(width * height), { left: 0, top: 0, right: width, bottom: height }, 3);
+    expect(grown[29 * width + 120]).toBe(0);
+    expect(grown[31 * width + 120]).toBe(0);
+  });
+
   it('takes dark bits of the mark the selection missed, which no kept line owns', () => {
     const [width, height] = [30, 12];
     const data = sheet(width, height);
