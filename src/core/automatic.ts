@@ -44,6 +44,17 @@ function isAntialiasedInk(data: Uint8ClampedArray, offset: number): boolean {
   return Math.max(red, green, blue) <= 220 && Math.max(red, green, blue) - Math.min(red, green, blue) <= 45;
 }
 
+/** Ink that takes part in the line graph: black or grey pen, red and blue marks. */
+export function isLineInk(data: Uint8ClampedArray, offset: number): boolean {
+  const kind = pixelKind(data, offset);
+  return kind === 'ink' || kind === 'red' || isBlueInk(data, offset);
+}
+
+/** Any pixel of a line, its anti-aliased edge included. */
+export function isInked(data: Uint8ClampedArray, offset: number): boolean {
+  return isLineInk(data, offset) || isAntialiasedInk(data, offset);
+}
+
 function componentIsGrid(id: number, labels: Int32Array, gridWidth: number, region: Bounds): boolean {
   const width = region.right - region.left + 1;
   const height = region.bottom - region.top + 1;
