@@ -303,8 +303,10 @@ describe('analysis time on a busy area', () => {
     }
     const began = performance.now();
     run(target);
-    // Was 26s: every slash checked every piece of the drawing before checking it was nearby.
-    expect(performance.now() - began).toBeLessThan(4_000);
+    // Was 26s on a Mac (0.35s now): every slash checked every piece of the drawing before
+    // checking it was nearby. A Windows coverage run is about 17 times slower, so the budget
+    // stays loose while still far below the old cost there.
+    expect(performance.now() - began).toBeLessThan(20_000);
   }, 60_000);
 });
 
