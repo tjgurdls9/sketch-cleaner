@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pixels, Snapshot } from '../src/shared/types';
 import { createSnapshot, runPixelJob } from '../src/core/engine';
-import { autoCleanDraft, isSheetFrame, withoutSheetFrames } from '../src/core/automatic';
+import { autoCleanDraft, isHollow, isSheetFrame, withoutSheetFrames } from '../src/core/automatic';
 
 const WHITE: [number, number, number, number] = [255, 255, 255, 255];
 const BLACK: [number, number, number, number] = [24, 24, 24, 255];
@@ -272,6 +272,23 @@ describe('sheet frame left after splitting off the form', () => {
   it('is the scanner bed or board around the sheet when it reaches three or four edges', () => {
     expect(isSheetFrame(bounds(5, 5, 834, 1184), grid.width, grid.height)).toBe(true);
     expect(isSheetFrame(bounds(3, 2, 836, 700), grid.width, grid.height)).toBe(true);
+  });
+
+  it('is hollow when its middle is empty, as a frame around a sheet is', () => {
+    const [width, height] = [100, 120];
+    const ring = new Int32Array(width * height);
+    const filled = new Int32Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        if (x < 10 || y < 10 || x >= 90 || y >= 110) ring[index] = 7;
+        // A tightly cropped photo: the drawing runs right through the middle.
+        if (x < 10 || y >= 110 || (x >= 40 && x < 46) || (y >= 50 && y < 54)) filled[index] = 7;
+      }
+    }
+    const whole = bounds(0, 0, width - 1, height - 1);
+    expect(isHollow(ring, 7, whole, width)).toBe(true);
+    expect(isHollow(filled, 7, whole, width)).toBe(false);
   });
 
   it('drops a frame from the figures only when figures of their own are left', () => {
