@@ -5,6 +5,8 @@ import { findRuledLines, splitRuledComponent, type RuledLine } from './ruled';
 export const MAX_AUTO_ANALYSIS_PIXELS = 1_000_000;
 /** Figure crops larger than this are analysed at a reduced scale for note candidates. */
 export const MAX_FIGURE_ANALYSIS_PIXELS = 6_000_000;
+/** How far the text mask is widened, as a share of the longer image side. */
+export const TEXT_MASK_GROWTH = 0.0012;
 
 type Progress = (completed: number, total: number) => void;
 interface Bounds { left: number; top: number; right: number; bottom: number; count: number }
@@ -246,6 +248,32 @@ function ruleWidthOf(snapshot: Snapshot, line: RuledLine, gridWidth: number, gri
   }), 0.5);
 }
 
+/**
+ * The detector's boxes hug the writing; glyph strokes poke out by a pixel or two. Widen the
+ * mask by about one pen stroke (scaled to the image) so whole glyphs go.
+ */
+function widenTextMask(textMask: Uint8Array, width: number, height: number): Uint8Array {
+  const radius = Math.round(Math.max(width, height) * TEXT_MASK_GROWTH);
+  if (radius < 1) return textMask;
+  const rows = new Uint8Array(textMask.length);
+  for (let y = 0; y < height; y += 1) {
+    let last = -Infinity;
+    for (let x = 0; x < width; x += 1) if (textMask[y * width + x]) last = x; else if (x - last <= radius) rows[y * width + x] = 255;
+    let next = Infinity;
+    for (let x = width - 1; x >= 0; x -= 1) {
+      if (textMask[y * width + x]) { next = x; rows[y * width + x] = 255; } else if (next - x <= radius) rows[y * width + x] = 255;
+    }
+  }
+  const result = new Uint8Array(textMask.length);
+  for (let x = 0; x < width; x += 1) {
+    let last = -Infinity;
+    for (let y = 0; y < height; y += 1) if (rows[y * width + x]) { last = y; result[y * width + x] = 255; } else if (y - last <= radius) result[y * width + x] = 255;
+    let next = Infinity;
+    for (let y = height - 1; y >= 0; y -= 1) if (rows[y * width + x]) next = y; else if (next - y <= radius) result[y * width + x] = 255;
+  }
+  return result;
+}
+
 function isBlueInk(data: Uint8ClampedArray, offset: number): boolean {
   const red = data[offset];
   const green = data[offset + 1];
@@ -425,6 +453,7 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     if (!(textMask instanceof Uint8Array) || textMask.length !== width * height) throw new RangeError('Invalid text mask buffer');
     for (const value of textMask) if (value !== 0 && value !== 255) throw new RangeError('Text mask values must be 0 or 255');
   }
+  const writing = textMask ? widenTextMask(textMask, width, height) : undefined;
   const size = analysisSize(width, height);
   const gridWidth = size.width;
   const gridHeight = size.height;
@@ -541,7 +570,7 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
   anchors.sort((a, b) => b.bounds.count - a.bounds.count);
   const selectedAnchors = anchors.filter((anchor, index) => index < 4 && anchor.bounds.count >= Math.max(20, largestAnchor * 0.12));
   const keep = makeKeepRegions(labels, gridWidth, gridHeight, selectedAnchors);
-  const candidates = figureCandidates(snapshot, selectedAnchors, gridWidth, gridHeight, textMask);
+  const candidates = figureCandidates(snapshot, selectedAnchors, gridWidth, gridHeight, writing);
   if (textMask && red) {
     const redRegions = labelInk(red, gridWidth, gridHeight);
     const shadowRegions = labelInk(shadow, gridWidth, gridHeight);
@@ -549,7 +578,7 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     const shadowFlags = labelComponentFlags(shadowRegions.components, gridPixels, Math.max(5, Math.floor(gridPixels * 0.00002)), 0.2);
     return selectCandidates(snapshot, cleanWithTextMask(
       snapshot,
-      textMask,
+      writing!,
       keep,
       labels,
       gridFlags,

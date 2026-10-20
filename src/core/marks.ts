@@ -318,6 +318,7 @@ export const MARK_RULES = {
   lineRun: 24,
   sweepLine: 16,
   scribbleMax: 35,
+  textShare: 0.35,
   loneStroke: 10,
   scissorExtra: 3,
   scissorReach: 7,
@@ -549,6 +550,8 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
   };
   for (const segment of segments) {
     if (share(segment, colored) >= 0.5) continue;
+    // Handwriting wiggles and has straight strokes too; inside writing these are not drawing.
+    if (share(segment, text) >= 0.5) continue;
     if ((units(segment) >= MARK_RULES.wavyMin && isWavy(segment)) || isSlash(segment)) keep.add(segment);
   }
   // A slash or zipper line runs on through the lines it crosses; follow it.
@@ -561,6 +564,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       const next = straightOn(segment, node);
       if (!next || keep.has(next)) continue;
       if (freeEnds(next).some(([, point]) => nearText(point))) continue;
+      if (share(next, text) >= 0.5) continue;
       const nextWavy = isWavy(next);
       if (!nextWavy && units(next) > MARK_RULES.slashMax) continue;
       if (!wavy && !nextWavy && straightness(next, width) < MARK_RULES.slashStraight) continue;
@@ -644,6 +648,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     return samples > 0 && beside / samples >= MARK_RULES.stitchShare;
   };
 
+  const looped = piecesOnLoops(segments);
   // --- Annotation ---------------------------------------------------------------------------
   const marked = new Set<Segment>(scissors);
   const writing = new Set<Segment>();
@@ -652,7 +657,30 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     // Coloured solid lines (e.g. a blue belt position) are notes; coloured dashes, and coloured
     // stitching running close beside a black seam, are stitches.
     if (share(segment, colored) >= 0.5 && !isDash(segment) && !alongSeam(segment)) { marked.add(segment); continue; }
-    if (share(segment, text) >= 0.5 && !isDrawing(segment)) { marked.add(segment); writing.add(segment); }
+    // Joined-up handwriting also runs on for a while; inside writing only a really long line
+    // (an outline crossing the note) is drawing.
+    // A closed detail fastened to the drawing (a belt loop under a label) is drawing too.
+    const fastenedLoop = looped.has(segment) && segment.nodes.some(node => (atNode.get(node) ?? [])
+      .some(other => other !== segment && lineRunOf(other, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun));
+    const throughWriting = keep.has(segment) || isDash(segment) || fastenedLoop
+      || lineRunOf(segment, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun * 2;
+    if (share(segment, text) >= MARK_RULES.textShare && !throughWriting) { marked.add(segment); writing.add(segment); }
+  }
+  // The detector rarely covers a whole glyph: carry the selection along the strokes joined to
+  // the writing, stopping at the drawing.
+  const glyphQueue = [...writing];
+  while (glyphQueue.length) {
+    const piece = glyphQueue.pop()!;
+    for (const node of piece.nodes) {
+      for (const next of atNode.get(node) ?? []) {
+        if (writing.has(next) || keep.has(next) || isDash(next) || isDrawing(next) || units(next) > MARK_RULES.sweepLine) continue;
+        // Only strokes that still touch the writing area: never walk off into the drawing.
+        if (share(next, text) === 0) continue;
+        writing.add(next);
+        marked.add(next);
+        glyphQueue.push(next);
+      }
+    }
   }
   // A leader is a line from the writing that is not continued straight on at the writing and
   // ends where it meets the drawing (a T) or in blank paper. A drawing line that merely
@@ -754,14 +782,15 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     const [x, y] = xy(index, width);
     return x < edge || y < edge || x >= width - edge || y >= height - edge;
   });
-  for (const segment of [...marked]) if (atBorder(segment) && !scissors.has(segment) && share(segment, colored) < 0.5) marked.delete(segment);
+  for (const segment of [...marked]) {
+    if (atBorder(segment) && !scissors.has(segment) && !writing.has(segment) && share(segment, colored) < 0.5) marked.delete(segment);
+  }
   // Short straight strokes standing off a long line at an angle look like stitch-end slashes
   // (or the half of one beyond the crossing): leave them to the person rather than erase.
   const slashLike = (segment: Segment): boolean => freeEnds(segment).length === 1 && straightness(segment, width) >= MARK_RULES.slashStraight
     && units(segment) >= MARK_RULES.slashMin && units(segment) <= MARK_RULES.slashMax && segment.nodes.some(node => !isEnd(node)
       && (atNode.get(node) ?? []).some(other => other !== segment && lineRunOf(other, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun
         && lineAngle(direction(segment, node, reach, width), direction(other, node, reach, width)) >= MARK_RULES.crossAngle));
-  const looped = piecesOnLoops(segments);
   for (const segment of segments) {
     if (marked.has(segment) || keep.has(segment) || isDash(segment) || isLine(segment) || atBorder(segment) || slashLike(segment) || looped.has(segment)
       || (share(segment, colored) >= 0.5 && alongSeam(segment))) continue;
