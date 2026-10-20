@@ -163,6 +163,9 @@ test('desktop local editing, manual request round-trip and durable recovery', as
     });
     expect(security).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false });
     expect(pageErrors).toEqual([]);
+    // "저장됨" above can still show the state from before the candidate was applied; let the
+    // autosave of that change finish so closing finds nothing unsaved.
+    await expect(page.locator('#saveState')).toContainText('저장됨');
     await page.screenshot({ path: path.join('test-results', 'workbench.png') });
   } finally {
     await app.close();
