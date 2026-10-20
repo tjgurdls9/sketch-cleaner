@@ -206,6 +206,27 @@ describe('wider leader candidates', () => {
     expect(selected(mask, target, 120, 200)).toBe(false);
   });
 
+  it('selects a leader from the edge that crosses the outline and stops at the stitching inside', () => {
+    const target = canvas(240, 240);
+    stroke(target, 100, 5, 100, 235);
+    dashes(target, 120, 5, 120, 235);
+    stroke(target, 0, 60, 118, 110, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 50, 81)).toBe(true);
+    expect(selected(mask, target, 100, 30)).toBe(false);
+    expect(selected(mask, target, 100, 200)).toBe(false);
+  });
+
+  it('keeps a straight drawing line that crosses another line and runs on far past it', () => {
+    const target = canvas(240, 240);
+    stroke(target, 100, 5, 100, 235);
+    stroke(target, 0, 120, 239, 120);
+    stroke(target, 200, 5, 200, 235);
+    const mask = run(target);
+    expect(selected(mask, target, 50, 120)).toBe(false);
+    expect(selected(mask, target, 150, 120)).toBe(false);
+  });
+
   it('keeps a drawing line that runs from the edge of the area to a corner', () => {
     const target = canvas(240, 240);
     stroke(target, 0, 100, 150, 100);

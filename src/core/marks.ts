@@ -334,6 +334,7 @@ export const MARK_RULES = {
   wavyMin: 12,
   wavyWiggle: 0.5,
   wavySwing: 0.25,
+  leaderMax: 120,
 };
 
 function lineAngle(a: readonly [number, number], b: readonly [number, number]): number {
@@ -525,6 +526,13 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     }
     return false;
   };
+  // A piece cut by the edge of the area cannot be judged whole.
+  const edge = Math.max(2, Math.round(strokeWidth));
+  const nearBorder = (index: number): boolean => {
+    const [x, y] = xy(index, width);
+    return x < edge || y < edge || x >= width - edge || y >= height - edge;
+  };
+  const atBorder = (segment: Segment): boolean => segment.points.some(nearBorder);
   // --- Drawing details that must stay -----------------------------------------------------
   const keep = new Set<Segment>();
   const isSlash = (segment: Segment): boolean => {
@@ -552,7 +560,8 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     if (share(segment, colored) >= 0.5) continue;
     // Handwriting wiggles and has straight strokes too; inside writing these are not drawing.
     if (share(segment, text) >= 0.5) continue;
-    if ((units(segment) >= MARK_RULES.wavyMin && isWavy(segment)) || isSlash(segment)) keep.add(segment);
+    // A zipper sits inside the figure; a trembling line out to the edge of the area is a leader.
+    if ((units(segment) >= MARK_RULES.wavyMin && isWavy(segment) && !atBorder(segment)) || isSlash(segment)) keep.add(segment);
   }
   // A slash or zipper line runs on through the lines it crosses; follow it.
   const queue = [...keep];
@@ -685,12 +694,19 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
   // A leader is a line from the writing that is not continued straight on at the writing and
   // ends where it meets the drawing (a T) or in blank paper. A drawing line that merely
   // touches a note runs on straight through that point and is left alone.
+  // A long straight line out of a note can end in line with a stroke of the writing; it is
+  // still a leader, not one dash of a stitch line.
+  const noteLeader = (segment: Segment): boolean => {
+    const free = freeEnds(segment);
+    return free.length === 1 && nearText(free[0][1]) && units(segment) >= MARK_RULES.loneStroke
+      && straightness(segment, width) >= MARK_RULES.slashStraight;
+  };
   const traceLeader = (start: Segment, from: number): Segment[] | undefined => {
     const chain: Segment[] = [];
     let current = start;
     let at = from;
     for (let hops = 0; hops < 4; hops += 1) {
-      if (keep.has(current) || isDash(current)) return undefined;
+      if (keep.has(current) || (isDash(current) && !noteLeader(current))) return undefined;
       chain.push(current);
       const far = otherNode(current, at);
       if (isEnd(far)) return chain;
@@ -724,6 +740,28 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     const tip = chain.length ? otherNode(chain[chain.length - 1], chain.length > 1 ? chain[chain.length - 2].nodes.find(n => chain[chain.length - 1].nodes.includes(n)) ?? node : node) : node;
     for (const head of atNode.get(tip) ?? []) {
       if (!chain.includes(head) && !keep.has(head) && units(head) <= MARK_RULES.arrowHeadMax && freeEnds(head).length) marked.add(head);
+    }
+  }
+  // A line cut by the edge of the area comes from a note outside it. If it ends on a drawing
+  // line in a T (the drawing line runs on both ways) it is a leader; a line that turns a corner
+  // there is the drawing itself.
+  const leaders = new Set<Segment>();
+  const endsInT = (from: Segment, node: number): boolean => {
+    const own = direction(from, node, reach, width);
+    const others = (atNode.get(node) ?? []).filter(other => other !== from);
+    return others.some((a, i) => others.slice(i + 1).some(b => alignment(a, b, node) > Math.cos(MARK_RULES.crossAngle * Math.PI / 180)
+      && lineAngle(own, direction(a, node, reach, width)) >= MARK_RULES.crossAngle));
+  };
+  for (const segment of segments) {
+    if (keep.has(segment) || marked.has(segment)) continue;
+    for (const [node, point] of freeEnds(segment)) {
+      if (!nearBorder(point)) continue;
+      const chain = traceLeader(segment, node);
+      if (!chain || chain.reduce((sum, piece) => sum + units(piece), 0) > MARK_RULES.leaderMax) continue;
+      let tip = node;
+      for (const piece of chain) tip = otherNode(piece, tip);
+      if (!endsInT(chain[chain.length - 1], tip)) continue;
+      for (const piece of chain) { marked.add(piece); leaders.add(piece); }
     }
   }
   // Arrows with no note: two short straight strokes meeting at a tip with a shaft behind them.
@@ -776,14 +814,9 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     if (group.length === 1 && straightness(group[0], width) >= MARK_RULES.slashStraight && units(group[0]) >= MARK_RULES.loneStroke) continue;
     for (const segment of group) marked.add(segment);
   }
-  // A piece cut by the edge of the area cannot be judged whole; leave it alone.
-  const edge = Math.max(2, Math.round(strokeWidth));
-  const atBorder = (segment: Segment): boolean => segment.points.some(index => {
-    const [x, y] = xy(index, width);
-    return x < edge || y < edge || x >= width - edge || y >= height - edge;
-  });
+  // Other pieces cut by the edge of the area cannot be judged whole; leave them alone.
   for (const segment of [...marked]) {
-    if (atBorder(segment) && !scissors.has(segment) && !writing.has(segment) && share(segment, colored) < 0.5) marked.delete(segment);
+    if (atBorder(segment) && !scissors.has(segment) && !writing.has(segment) && !leaders.has(segment) && share(segment, colored) < 0.5) marked.delete(segment);
   }
   // Short straight strokes standing off a long line at an angle look like stitch-end slashes
   // (or the half of one beyond the crossing): leave them to the person rather than erase.
