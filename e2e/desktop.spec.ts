@@ -624,6 +624,20 @@ test('photoshop-style tools edit a 12MP sheet instantly with real mouse and keys
     await page.keyboard.press('Enter');
     await page.keyboard.press('Backspace');
     expect(await overlayShown()).toBe(false);
+
+    // M with real modifier keys: Shift-drag adds, Alt-drag subtracts the middle.
+    await page.keyboard.press('m');
+    const box = async (from: [number, number], to: [number, number], key?: 'Shift' | 'Alt') => {
+      const [start, end] = [await point(...from), await point(...to)];
+      if (key) await page.keyboard.down(key);
+      await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 5 }); await page.mouse.up();
+      if (key) await page.keyboard.up(key);
+    };
+    await box([1700, 1350], [1800, 1480]);
+    await box([1880, 1350], [1960, 1480], 'Shift');
+    await box([1750, 1350], [1900, 1480], 'Alt');
+    await page.keyboard.press('Delete');
+    expect(await overlayShown()).toBe(false);
     await page.screenshot({ path: path.join(process.env.SKETCH_SHOT_DIR ?? root, 'photoshop-tools.png') });
 
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
@@ -634,9 +648,9 @@ test('photoshop-style tools edit a 12MP sheet instantly with real mouse and keys
       const reopened = await window.desktop.openRecent(recent.value[0].id);
       if (!reopened.ok) throw new Error(reopened.error);
       const at = (x: number, y: number) => [...reopened.value.snapshot.working.data.slice((y * w + x) * 4, (y * w + x) * 4 + 3)];
-      return { erased: at(1000, 1420), marquee: at(2300, 1420), pen: at(3500, 1420), untouched: at(3800, 1420), paperGrid: PAPER_GRID.filter(([x, y]) => at(x, y).join() !== '246,243,236') };
+      return { erased: at(1000, 1420), marquee: at(2300, 1420), pen: at(3500, 1420), untouched: at(3800, 1420), combined: [at(1720, 1420), at(1820, 1420), at(1930, 1420)], paperGrid: PAPER_GRID.filter(([x, y]) => at(x, y).join() !== '246,243,236') };
     }, [width, PAPER_GRID] as const);
-    expect(saved).toEqual({ erased: [255, 255, 255], marquee: [255, 255, 255], pen: [255, 255, 255], untouched: [40, 40, 40], paperGrid: [] });
+    expect(saved).toEqual({ erased: [255, 255, 255], marquee: [255, 255, 255], pen: [255, 255, 255], untouched: [40, 40, 40], combined: [[255, 255, 255], [40, 40, 40], [255, 255, 255]], paperGrid: [] });
     expect(pageErrors).toEqual([]);
     console.log(`12MP eraser strokes ${eraseTimes.map(ms => ms.toFixed(0)).join('/')}ms, marquee Delete ${deleteMs.toFixed(0)}ms`);
   } finally {

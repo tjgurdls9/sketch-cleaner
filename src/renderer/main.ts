@@ -839,7 +839,7 @@ function finishMarquee(): void {
   endDraft();
   if (!start || !end) return;
   const rect = marqueeRect(start, end, marqueeModifiers);
-  // A plain click without a drag deselects, as in Photoshop.
+  // A plain click without a drag deselects; a Shift or Alt click keeps the selection, as in Photoshop.
   if (rect.width < 1 || rect.height < 1) { if (selectionCombine === 'replace') deselect(); return; }
   const combine = selectionCombine;
   applyNow(snapshot => selectLasso(snapshot, rectPolygon(rect), 'inside', combine), '사각 선택을 만들지 못했습니다.');
@@ -1376,7 +1376,7 @@ function autoCleanDescription(): string {
     idle: { title: '원본 미리보기입니다', detail: '자동 정리는 글씨 범위를 참고해 주변의 분리된 표시를 정리합니다. 선과 겹쳐 판단하기 어려운 곳은 직접 수정하세요.' },
     running: { title: '자동 정리 중입니다', detail: '먼저 로컬 모델이 글씨 범위를 살펴본 뒤 정리합니다. 취소해도 사진은 유지됩니다.' },
     complete: { title: '자동 정리를 적용했습니다', detail: '결과 선을 살펴보고 필요한 곳은 직접 수정하세요.' },
-    review: { title: '도해 안의 지울 후보를 빨간색으로 골라 두었습니다', detail: '글씨·화살표·가위표·색 표시 후보입니다. 디자인인 곳은 표시 지우기로 빼고 Delete로 지우세요.' },
+    review: { title: '도해 안의 지울 후보를 빨간색으로 골라 두었습니다', detail: '글씨·화살표·가위표·색 표시 후보입니다. 디자인인 곳은 표시 지우기나 Alt를 누른 선택으로 빼고 Delete로 지우세요.' },
     unchanged: { title: '', detail: '자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.' },
     cancelled: { title: '자동 정리를 취소했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
     failed: { title: '자동 정리를 마치지 못했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
