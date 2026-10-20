@@ -69,6 +69,16 @@ describe('taking in the soft edge of selected marks', () => {
     expect(grown[31 * width + 120]).toBe(0);
   });
 
+  it('never grows into a transparent backdrop', () => {
+    const [width, height] = [100, 40];
+    const data = sheet(width, height);
+    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) data.set([0, 0, 0, 0], (y * width + x) * 4);
+    const mask = new Uint8Array(width * height);
+    for (let x = 30; x < 70; x += 1) { paint(data, width, x, 20, [60, 60, 60]); mask[20 * width + x] = 255; }
+    const grown = growIntoHalo(data, width, height, mask, new Uint8Array(width * height), { left: 0, top: 0, right: width, bottom: height }, 3);
+    expect(grown[21 * width + 50]).toBe(0);
+  });
+
   it('takes dark bits of the mark the selection missed, which no kept line owns', () => {
     const [width, height] = [30, 12];
     const data = sheet(width, height);

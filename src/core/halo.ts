@@ -1,41 +1,14 @@
+import { paperColorAt } from './paper';
+
 /** A pixel area: right and bottom are exclusive. */
 export interface Region { left: number; top: number; right: number; bottom: number }
 
 // A pixel belongs to a mark's soft edge when it stands out from the paper by this much.
 const HALO_DARKER = 10;
 const HALO_TINT = 18;
-// The paper is measured per tile: a sheet, a grey backdrop or a shadow each set their own.
-const PAPER_TILE = 48;
-const PAPER_SAMPLE_STEP = 2;
-
-type RGB = readonly [number, number, number];
+const OPAQUE = 128;
 
 const lightness = (data: Uint8ClampedArray, offset: number): number => (data[offset] + data[offset + 1] + data[offset + 2]) / 3;
-
-/** Median colour of each tile: the paper (or backdrop) the marks in it sit on. */
-function paperTiles(data: Uint8ClampedArray, width: number, region: Region): { at: (x: number, y: number) => RGB } {
-  const columns = Math.max(1, Math.ceil((region.right - region.left) / PAPER_TILE));
-  const rows = Math.max(1, Math.ceil((region.bottom - region.top) / PAPER_TILE));
-  const tiles: RGB[] = [];
-  const median = (values: number[]): number => (values.length ? values.sort((a, b) => a - b)[values.length >> 1] : 255);
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const channels: number[][] = [[], [], []];
-      const top = region.top + row * PAPER_TILE;
-      const left = region.left + column * PAPER_TILE;
-      for (let y = top; y < Math.min(region.bottom, top + PAPER_TILE); y += PAPER_SAMPLE_STEP) {
-        for (let x = left; x < Math.min(region.right, left + PAPER_TILE); x += PAPER_SAMPLE_STEP) {
-          const offset = (y * width + x) * 4;
-          for (let channel = 0; channel < 3; channel += 1) channels[channel].push(data[offset + channel]);
-        }
-      }
-      tiles.push([median(channels[0]), median(channels[1]), median(channels[2])]);
-    }
-  }
-  return {
-    at: (x: number, y: number): RGB => tiles[Math.floor((y - region.top) / PAPER_TILE) * columns + Math.floor((x - region.left) / PAPER_TILE)],
-  };
-}
 
 /**
  * Grows a 0/255 selection over the soft edge of the marks it holds (anti-aliasing, marker bleed,
@@ -50,11 +23,13 @@ export function growIntoHalo(data: Uint8ClampedArray, width: number, height: num
   const right = Math.min(width, region.right);
   const bottom = Math.min(height, region.bottom);
   const inside = (x: number, y: number): boolean => x >= left && y >= top && x < right && y < bottom;
-  const papers = paperTiles(data, width, { left, top, right, bottom });
+  const paperAt = paperColorAt(data, width, height, mask);
   const standsOut = (index: number): boolean => {
     const offset = index * 4;
     const x = index % width;
-    const paper = papers.at(x, (index - x) / width);
+    const paper = paperAt(x, (index - x) / width);
+    // Nothing grows into a transparent backdrop, nor onto marks sitting on one.
+    if (data[offset + 3] < OPAQUE || paper[3] < OPAQUE) return false;
     const paperLight = (paper[0] + paper[1] + paper[2]) / 3;
     const tint = Math.max(Math.abs(data[offset] - paper[0]), Math.abs(data[offset + 1] - paper[1]), Math.abs(data[offset + 2] - paper[2]));
     return paperLight - lightness(data, offset) > HALO_DARKER || tint > HALO_TINT;

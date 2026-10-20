@@ -7,6 +7,19 @@ import sharp from 'sharp';
 import { AUTOMATIC_FIXTURE, makeAutomaticFixture } from '../tests/automatic-fixture';
 import { AI_FIXTURE, makeAIFixture } from '../tests/ai-fixture';
 
+/** Erasing fills with the surrounding paper; photos and anti-aliasing allow a little drift. */
+function expectNear(actual: readonly number[], expected: readonly number[], tolerance = 8): void {
+  expect(actual.length).toBe(expected.length);
+  actual.forEach((value, channel) => expect(Math.abs(value - expected[channel])).toBeLessThanOrEqual(tolerance));
+}
+
+// Erased marks on the garment's beige fill (#eee6d9) take that colour back, not white.
+const GARMENT_FILL = [238, 230, 217, 255];
+// The automatic fixture's sheet (#f5f5f2), where a later erase repaints an auto-cleaned arrow.
+const SHEET_PAPER = [245, 245, 242, 255];
+// Plain fabric inside the AI fixture's left garment, away from seams and stitching.
+const AI_FABRIC = { x: 440, y: 400 };
+
 async function imageScreenPoint(page: import('@playwright/test').Page, x: number, y: number, width: number, height: number): Promise<{ x: number; y: number }> {
   const bounds = await page.locator('#stage').boundingBox();
   if (!bounds) throw new Error('작업 캔버스 위치를 찾을 수 없습니다.');
@@ -277,7 +290,7 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     await page.locator('#saveProjectButton').click();
     await expect(page.locator('#saveState')).toContainText('저장됨');
     let manuallyCleaned = await readPersisted();
-    expect(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
+    expectNear(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y), GARMENT_FILL);
 
     await page.locator('#undoButton').click();
     await expect(page.locator('#processingOverlay')).toBeHidden();
@@ -290,7 +303,7 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     await page.locator('#saveProjectButton').click();
     await expect(page.locator('#saveState')).toContainText('저장됨');
     manuallyCleaned = await readPersisted();
-    expect(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
+    expectNear(manuallyCleaned.pixelAt(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y), GARMENT_FILL);
 
     await page.locator('button[data-tool="protect"]').click();
     await page.locator('#brushSize').evaluate(element => {
@@ -330,9 +343,9 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
     const exported = await sharp(await readFile(exportedPath)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const outputPixel = (x: number, y: number): number[] => [...exported.data.subarray((y * exported.info.width + x) * 4, (y * exported.info.width + x) * 4 + 4)];
     expect([exported.info.width, exported.info.height]).toEqual([AUTOMATIC_FIXTURE.width, AUTOMATIC_FIXTURE.height]);
-    expect(outputPixel(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y)).toEqual([255, 255, 255, 255]);
+    expectNear(outputPixel(AUTOMATIC_FIXTURE.arrow.x, AUTOMATIC_FIXTURE.arrow.y), SHEET_PAPER);
     expect(outputPixel(AUTOMATIC_FIXTURE.seam.x, AUTOMATIC_FIXTURE.seam.y)).toEqual(seamBefore);
-    expect(outputPixel(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y)).toEqual([255, 255, 255, 255]);
+    expectNear(outputPixel(AUTOMATIC_FIXTURE.manualFill.x, AUTOMATIC_FIXTURE.manualFill.y), GARMENT_FILL);
 
     const savedVersion = reopened.workVersion;
     const savedProjectId = reopened.id;
@@ -356,8 +369,8 @@ test('imported garment cleanup, manual fill, undo/redo, PNG export, and reopen p
       };
     }, savedProjectId);
     expect(reopenedInUi.workVersion).toBe(savedVersion);
-    expect(reopenedInUi.manualPixel).toEqual([255, 255, 255, 255]);
-    expect(reopenedInUi.arrowPixel).toEqual([255, 255, 255, 255]);
+    expectNear(reopenedInUi.manualPixel, GARMENT_FILL);
+    expectNear(reopenedInUi.arrowPixel, SHEET_PAPER);
     await page.screenshot({ path: path.join('test-results', 'automatic-workbench.png') });
     expect(pageErrors).toEqual([]);
   } finally {
@@ -509,7 +522,7 @@ test('local AI auto cleanup, manual correction, export, and reopen preserve orig
     await page.locator('#saveProjectButton').click();
     await expect(page.locator('#saveState')).toContainText('저장됨');
     let corrected = await readPersisted();
-    expect(corrected.pixelAt(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expectNear(corrected.pixelAt(AI_FIXTURE.manualFix), corrected.pixelAt(AI_FABRIC), 14);
     expect(corrected.pixelAt(AI_FIXTURE.garmentSeam)).toEqual(seam);
     expect(corrected.pixelAt(AI_FIXTURE.garmentButton)).toEqual(button);
     expect(corrected.pixelAt(AI_FIXTURE.garmentStitch)).toEqual(stitch);
@@ -524,7 +537,7 @@ test('local AI auto cleanup, manual correction, export, and reopen preserve orig
     await page.locator('#saveProjectButton').click();
     await expect(page.locator('#saveState')).toContainText('저장됨');
     corrected = await readPersisted();
-    expect(corrected.pixelAt(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expectNear(corrected.pixelAt(AI_FIXTURE.manualFix), corrected.pixelAt(AI_FABRIC), 14);
 
     await page.locator('#tabExport').click();
     await app.evaluate(({ dialog }, filePath) => {
@@ -538,7 +551,7 @@ test('local AI auto cleanup, manual correction, export, and reopen preserve orig
       return [...exported.data.subarray(offset, offset + 4)];
     };
     expect([exported.info.width, exported.info.height]).toEqual([AI_FIXTURE.width, AI_FIXTURE.height]);
-    expect(exportedPixel(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expectNear(exportedPixel(AI_FIXTURE.manualFix), exportedPixel(AI_FABRIC), 14);
     expect(exportedPixel(AI_FIXTURE.garmentSeam)).toEqual(seam);
     expect(exportedPixel(AI_FIXTURE.garmentButton)).toEqual(button);
     expect(createHash('sha256').update(await readFile(sourcePath)).digest('hex')).toBe(sourceHash);
@@ -559,7 +572,7 @@ test('local AI auto cleanup, manual correction, export, and reopen preserve orig
     const afterReopen = await readPersisted();
     expect(afterReopen.darkCount(AI_FIXTURE.english)).toBeLessThan(originalEnglishInk * 0.35);
     expect(afterReopen.darkCount(AI_FIXTURE.korean)).toBeLessThan(originalKoreanInk * 0.35);
-    expect(afterReopen.pixelAt(AI_FIXTURE.manualFix)).toEqual([255, 255, 255, 255]);
+    expectNear(afterReopen.pixelAt(AI_FIXTURE.manualFix), afterReopen.pixelAt(AI_FABRIC), 14);
     expect(createHash('sha256').update(await readFile(sourcePath)).digest('hex')).toBe(sourceHash);
     await page.screenshot({ path: path.join('test-results', 'local-ai-workbench.png') });
     expect(pageErrors).toEqual([]);
@@ -577,7 +590,8 @@ test('photoshop-style tools edit a 12MP sheet instantly with real mouse and keys
   const [width, height] = [4000, 3000];
   const sheet = Buffer.alloc(width * height * 4);
   for (let offset = 0; offset < sheet.length; offset += 4) sheet.set([246, 243, 236, 255], offset);
-  for (let y = 1400; y < 1440; y += 1) for (let x = 0; x < width; x += 1) sheet.set([40, 40, 40, 255], (y * width + x) * 4);
+  // A thick pen line across the sheet (12px, as a marker at 12MP).
+  for (let y = 1414; y < 1426; y += 1) for (let x = 0; x < width; x += 1) sheet.set([40, 40, 40, 255], (y * width + x) * 4);
   await sharp(sheet, { raw: { width, height, channels: 4 } }).png().toFile(sourcePath);
   const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
   const executablePath = process.env.SKETCH_TEST_EXECUTABLE;
@@ -653,7 +667,9 @@ test('photoshop-style tools edit a 12MP sheet instantly with real mouse and keys
       const at = (x: number, y: number) => [...reopened.value.snapshot.working.data.slice((y * w + x) * 4, (y * w + x) * 4 + 3)];
       return { erased: at(1000, 1420), marquee: at(2300, 1420), pen: at(3500, 1420), untouched: at(3800, 1420), combined: [at(1720, 1420), at(1820, 1420), at(1930, 1420)], paperGrid: PAPER_GRID.filter(([x, y]) => at(x, y).join() !== '246,243,236') };
     }, [width, PAPER_GRID] as const);
-    expect(saved).toEqual({ erased: [255, 255, 255], marquee: [255, 255, 255], pen: [255, 255, 255], untouched: [40, 40, 40], combined: [[255, 255, 255], [40, 40, 40], [255, 255, 255]], paperGrid: [] });
+    // Erasing fills with the sheet's own paper colour.
+    const PAPER = [246, 243, 236];
+    expect(saved).toEqual({ erased: PAPER, marquee: PAPER, pen: PAPER, untouched: [40, 40, 40], combined: [PAPER, [40, 40, 40], PAPER], paperGrid: [] });
     expect(pageErrors).toEqual([]);
     console.log(`12MP eraser strokes ${eraseTimes.map(ms => ms.toFixed(0)).join('/')}ms, marquee Delete ${deleteMs.toFixed(0)}ms`);
   } finally {
@@ -667,7 +683,11 @@ async function launchWithPhotos(sizes: Array<{ width: number; height: number; co
   const photos: string[] = [];
   for (const [index, { width, height, color }] of sizes.entries()) {
     const file = path.join(root, `sheet-${index + 1}.png`);
-    await sharp({ create: { width, height, channels: 4, background: { r: color[0], g: color[1], b: color[2], alpha: 1 } } }).png().toFile(file);
+    // Paper of the given colour with a dark pen line across the middle to erase.
+    const data = Buffer.alloc(width * height * 4);
+    for (let offset = 0; offset < data.length; offset += 4) data.set([...color, 255], offset);
+    for (let y = Math.floor(height / 2) - 3; y < Math.floor(height / 2) + 3; y += 1) for (let x = 0; x < width; x += 1) data.set([35, 35, 35, 255], (y * width + x) * 4);
+    await sharp(data, { raw: { width, height, channels: 4 } }).png().toFile(file);
     photos.push(file);
   }
   const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
@@ -687,7 +707,7 @@ async function launchWithPhotos(sizes: Array<{ width: number; height: number; co
 }
 
 test('closing with unsaved changes asks in a native dialog: 취소 keeps the window, 닫기 closes it', async () => {
-  const { root, photos, app, page, chooseNext, eraseAcross } = await launchWithPhotos([{ width: 300, height: 200, color: [120, 120, 120] }]);
+  const { root, photos, app, page, chooseNext, eraseAcross } = await launchWithPhotos([{ width: 300, height: 200, color: [244, 242, 234] }]);
   try {
     await chooseNext(photos[0]);
     await page.locator('#emptyOpenButton').click();
@@ -715,8 +735,8 @@ test('closing with unsaved changes asks in a native dialog: 취소 keeps the win
 
 test('opening the next photo after saving one leaves only the new photo and keeps the first in recent work', async () => {
   const { root, photos, app, page, chooseNext, eraseAcross } = await launchWithPhotos([
-    { width: 300, height: 200, color: [120, 120, 120] },
-    { width: 260, height: 180, color: [90, 140, 200] },
+    { width: 300, height: 200, color: [244, 242, 234] },
+    { width: 260, height: 180, color: [236, 240, 246] },
   ]);
   const dialogs: string[] = [];
   page.on('dialog', dialog => { dialogs.push(dialog.message()); void dialog.dismiss().catch(() => undefined); });
@@ -760,7 +780,7 @@ test('opening the next photo after saving one leaves only the new photo and keep
       const { width, data } = reopened.value.snapshot.working;
       return { count: recent.value.length, erased: [...data.slice((100 * width + 150) * 4, (100 * width + 150) * 4 + 3)] };
     });
-    expect(saved).toEqual({ count: 2, erased: [255, 255, 255] });
+    expect(saved).toEqual({ count: 2, erased: [244, 242, 234] });
     const exported = await sharp(await readFile(exportPath)).raw().toBuffer({ resolveWithObject: true });
     expect([exported.info.width, exported.info.height]).toEqual([300, 200]);
   } finally {

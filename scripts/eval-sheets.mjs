@@ -98,7 +98,7 @@ for (const name of photos) {
     if (Math.min(marked[o], marked[o + 1], marked[o + 2]) < PAPER_MIN) { marked.set(CANDIDATE_INK, o); candidates++; }
   }
   // Delete exactly as the app does it.
-  const deleted = fillSelection(next, { kind: 'white' }).working.data;
+  const deleted = fillSelection(next, { kind: 'paper' }).working.data;
   const left = residue(deleted, next.deleteMask, info.width, info.height);
   const stem = path.parse(name).name;
   await preview(marked, info, `${stem}-marked.png`);
