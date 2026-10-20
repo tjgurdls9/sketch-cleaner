@@ -658,3 +658,110 @@ test('photoshop-style tools edit a 12MP sheet instantly with real mouse and keys
     await rm(root, { recursive: true, force: true });
   }
 });
+
+async function launchWithPhotos(sizes: Array<{ width: number; height: number; color: [number, number, number] }>) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sketch-switch-'));
+  const photos: string[] = [];
+  for (const [index, { width, height, color }] of sizes.entries()) {
+    const file = path.join(root, `sheet-${index + 1}.png`);
+    await sharp({ create: { width, height, channels: 4, background: { r: color[0], g: color[1], b: color[2], alpha: 1 } } }).png().toFile(file);
+    photos.push(file);
+  }
+  const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
+  const executablePath = process.env.SKETCH_TEST_EXECUTABLE;
+  const app = await electron.launch({ executablePath, args: [...(executablePath ? [] : ['.']), `--user-data-dir=${path.join(root, 'profile')}`], env });
+  const page = await app.firstWindow();
+  const chooseNext = (file: string) => app.evaluate(({ dialog }, filePath) => {
+    Object.defineProperty(dialog, 'showOpenDialog', { configurable: true, value: async () => ({ canceled: false, filePaths: [filePath] }) });
+  }, file);
+  const eraseAcross = async (width: number, height: number) => {
+    await page.keyboard.press('e');
+    await page.locator('#brushSize').fill('20');
+    const [a, b] = [await imageScreenPoint(page, 20, height / 2, width, height), await imageScreenPoint(page, width - 20, height / 2, width, height)];
+    await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 8 }); await page.mouse.up();
+  };
+  return { root, photos, app, page, chooseNext, eraseAcross };
+}
+
+test('closing with unsaved changes asks in a native dialog: 취소 keeps the window, 닫기 closes it', async () => {
+  const { root, photos, app, page, chooseNext, eraseAcross } = await launchWithPhotos([{ width: 300, height: 200, color: [120, 120, 120] }]);
+  try {
+    await chooseNext(photos[0]);
+    await page.locator('#emptyOpenButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText('300');
+    await app.evaluate(({ dialog }) => {
+      const calls: string[] = [];
+      Object.assign(globalThis, { closeAsked: calls, closeAnswer: 1 });
+      Object.defineProperty(dialog, 'showMessageBoxSync', { configurable: true, value: (_window: unknown, options: { message: string }) => {
+        calls.push(options.message);
+        return (globalThis as unknown as { closeAnswer: number }).closeAnswer;
+      } });
+    });
+    await eraseAcross(300, 200);
+    // Close right away, before the autosave a moment later.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(() => app.evaluate(() => (globalThis as unknown as { closeAsked: string[] }).closeAsked.length)).toBe(1);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    expect(await app.evaluate(() => (globalThis as unknown as { closeAsked: string[] }).closeAsked[0])).toContain('저장되지 않은 변경사항');
+    await app.evaluate(() => Object.assign(globalThis, { closeAnswer: 0 }));
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('opening the next photo after saving one leaves only the new photo and keeps the first in recent work', async () => {
+  const { root, photos, app, page, chooseNext, eraseAcross } = await launchWithPhotos([
+    { width: 300, height: 200, color: [120, 120, 120] },
+    { width: 260, height: 180, color: [90, 140, 200] },
+  ]);
+  const dialogs: string[] = [];
+  page.on('dialog', dialog => { dialogs.push(dialog.message()); void dialog.dismiss().catch(() => undefined); });
+  try {
+    // Photo 1: edit, wait for the project save, then save the PNG.
+    await chooseNext(photos[0]);
+    await page.locator('#emptyOpenButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText('300');
+    await eraseAcross(300, 200);
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+    const firstName = await page.locator('#projectName').innerText();
+    await page.locator('#tabExport').click();
+    const exportPath = path.join(root, 'sheet-1-clean.png');
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showSaveDialog', { configurable: true, value: async () => ({ canceled: false, filePath }) });
+    }, exportPath);
+    await page.getByRole('button', { name: 'PNG 저장', exact: true }).click();
+    await expect(page.locator('#inspectorContent')).toContainText('저장 완료');
+
+    // Photo 2: opens without a prompt and replaces photo 1 on screen.
+    await chooseNext(photos[1]);
+    await page.locator('#openButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText('260');
+    await expect(page.locator('#projectName')).not.toHaveText(firstName);
+    expect(dialogs).toEqual([]);
+    await expect(page.locator('#tabEdit')).toHaveAttribute('aria-selected', 'true');
+    // Photo 1's undo history is gone with it: undo cannot bring photo 1 back.
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+    await expect(page.locator('#imageDimensions')).toContainText('260');
+    // Nothing to undo on the new photo: it must not turn into an unsaved change, even for the
+    // moment before the next autosave.
+    expect(await page.locator('#saveState').innerText()).toContain('저장됨');
+
+    const saved = await page.evaluate(async () => {
+      const recent = await window.desktop.listRecent();
+      if (!recent.ok) throw new Error(recent.error);
+      const first = recent.value.find(item => item.name.includes('sheet-1'));
+      if (!first) throw new Error('1번 작업이 최근 작업에 없습니다.');
+      const reopened = await window.desktop.openRecent(first.id);
+      if (!reopened.ok) throw new Error(reopened.error);
+      const { width, data } = reopened.value.snapshot.working;
+      return { count: recent.value.length, erased: [...data.slice((100 * width + 150) * 4, (100 * width + 150) * 4 + 3)] };
+    });
+    expect(saved).toEqual({ count: 2, erased: [255, 255, 255] });
+    const exported = await sharp(await readFile(exportPath)).raw().toBuffer({ resolveWithObject: true });
+    expect([exported.info.width, exported.info.height]).toEqual([300, 200]);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
