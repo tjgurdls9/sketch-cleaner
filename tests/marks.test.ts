@@ -195,6 +195,55 @@ describe('note candidates inside a figure', () => {
   });
 });
 
+describe('wider leader candidates', () => {
+  it('selects a leader cut by the edge of the area where it meets a drawing line in a T', () => {
+    const target = canvas(240, 240);
+    stroke(target, 120, 5, 120, 235);
+    stroke(target, 0, 40, 117, 110, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 60, 76)).toBe(true);
+    expect(selected(mask, target, 120, 30)).toBe(false);
+    expect(selected(mask, target, 120, 200)).toBe(false);
+  });
+
+  it('keeps a drawing line that runs from the edge of the area to a corner', () => {
+    const target = canvas(240, 240);
+    stroke(target, 0, 100, 150, 100);
+    stroke(target, 150, 100, 150, 235);
+    stroke(target, 40, 160, 220, 160);
+    const mask = run(target);
+    expect(selected(mask, target, 75, 100)).toBe(false);
+    expect(selected(mask, target, 150, 200)).toBe(false);
+  });
+
+  it('selects a trembling leader at the edge of the area instead of keeping it as a zipper line', () => {
+    const target = canvas(240, 240);
+    stroke(target, 60, 5, 60, 235);
+    let [px, py] = [239, 40];
+    for (let x = 238; x >= 63; x -= 1) {
+      const y = 40 + (239 - x) * 0.5 + 6 * Math.sin(x / 5);
+      stroke(target, px, py, x, y, { thickness: 3 });
+      [px, py] = [x, y];
+    }
+    const mask = run(target);
+    expect(selected(mask, target, 150, Math.round(40 + 89 * 0.5 + 6 * Math.sin(30)))).toBe(true);
+    expect(selected(mask, target, 60, 200)).toBe(false);
+  });
+
+  it('selects a leader whose free end lines up with a stroke of the note like the next dash', () => {
+    const target = canvas(240, 200);
+    stroke(target, 60, 5, 60, 195);
+    stroke(target, 200, 40, 63, 120, { thickness: 3 });
+    stroke(target, 210, 34, 226, 25, { thickness: 3 }); // first stroke of the note, in line with the leader
+    stroke(target, 214, 14, 232, 14, { thickness: 3 });
+    writing(target, 204, 6, 239, 40);
+    const mask = run(target);
+    expect(selected(mask, target, 130, 80)).toBe(true);
+    expect(selected(mask, target, 60, 40)).toBe(false);
+    expect(selected(mask, target, 60, 170)).toBe(false);
+  });
+});
+
 describe('form table split', () => {
   it('takes long ruled lines out of a table component and leaves the drawing that touched it', () => {
     const width = 300;
