@@ -294,6 +294,24 @@ describe('form table split', () => {
     expect(drawing?.length).toBeGreaterThan(80);
     expect(ruled.has(70 * width + 45)).toBe(false);
   });
+
+  it('finds right-side vertical rules on a landscape analysis grid', () => {
+    const width = 960;
+    const height = 720;
+    const labels = new Int32Array(width * height);
+    for (let y = 0; y < height; y += 1) labels[y * width + 900] = 1;
+    const { lines } = findRuledLines(labels, 1, { left: 900, top: 0, right: 900, bottom: height - 1 }, width, height);
+    expect(lines.some(line => !line.horizontal && line.cells.includes(900))).toBe(true);
+  });
+
+  it('finds bottom horizontal rules on a portrait analysis grid', () => {
+    const width = 720;
+    const height = 960;
+    const labels = new Int32Array(width * height);
+    for (let x = 0; x < width; x += 1) labels[900 * width + x] = 1;
+    const { lines } = findRuledLines(labels, 1, { left: 0, top: 900, right: width - 1, bottom: 900 }, width, height);
+    expect(lines.some(line => line.horizontal && line.cells.includes(900 * width))).toBe(true);
+  });
 });
 
 describe('automatic cleanup with note candidates', () => {
@@ -361,4 +379,40 @@ describe('automatic cleanup with note candidates', () => {
     const offset = (200 * 400 + 211) * 4;
     expect([...result.working.data.slice(offset, offset + 4)]).toEqual([30, 30, 30, 255]);
   });
+
+  it('keeps a garment joined to a right-side rule while cleaning exterior text on a landscape page', () => {
+    const width = 960;
+    const height = 720;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const line = (x0: number, y0: number, x1: number, y1: number, thickness = 1): void => {
+      const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0));
+      for (let step = 0; step <= steps; step += 1) {
+        const x = Math.round(x0 + (x1 - x0) * step / Math.max(1, steps));
+        const y = Math.round(y0 + (y1 - y0) * step / Math.max(1, steps));
+        const radius = Math.floor(thickness / 2);
+        for (let dy = -radius; dy <= radius; dy += 1) for (let dx = -radius; dx <= radius; dx += 1) {
+          const px = x + dx; const py = y + dy;
+          if (px >= 0 && py >= 0 && px < width && py < height) data.set([30, 30, 30, 255], (py * width + px) * 4);
+        }
+      }
+    };
+    for (const y of [40, 680]) line(40, y, 920, y);
+    for (const x of [40, 360, 600, 900]) line(x, 40, x, 680);
+    // A sparse skirt outline touching the right form rule at x=900.
+    line(790, 220, 900, 220, 5); line(790, 220, 770, 500, 5); line(900, 220, 900, 500, 5);
+    line(770, 500, 835, 515, 5); line(835, 515, 900, 500, 5); line(845, 220, 850, 510, 4);
+    // Small exterior writing with a corresponding detector mask.
+    for (let y = 100; y < 106; y += 1) for (let x = 100; x < 108; x += 1) data.set([30, 30, 30, 255], (y * width + x) * 4);
+    const source: Pixels = { width, height, data };
+    const snapshot = createSnapshot(source, 'landscape');
+    const textMask = new Uint8Array(width * height);
+    for (let y = 100; y < 106; y += 1) for (let x = 100; x < 108; x += 1) textMask[y * width + x] = 255;
+
+    const result = autoCleanDraft(snapshot, undefined, textMask);
+    const outsideIndex = 102 * width + 103;
+    const garmentOffset = (350 * width + 900) * 4;
+    expect([...result.working.data.slice(outsideIndex * 4, outsideIndex * 4 + 4)]).toEqual([255, 255, 255, 255]);
+    expect([...result.working.data.slice(garmentOffset, garmentOffset + 4)]).toEqual([30, 30, 30, 255]);
+    expect(result.base.data).toEqual(snapshot.base.data);
+  }, 30_000);
 });
