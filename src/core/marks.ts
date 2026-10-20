@@ -560,8 +560,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     if (share(segment, colored) >= 0.5) continue;
     // Handwriting wiggles and has straight strokes too; inside writing these are not drawing.
     if (share(segment, text) >= 0.5) continue;
-    // A zipper sits inside the figure; a trembling line out to the edge of the area is a leader.
-    if ((units(segment) >= MARK_RULES.wavyMin && isWavy(segment) && !atBorder(segment)) || isSlash(segment)) keep.add(segment);
+    if ((units(segment) >= MARK_RULES.wavyMin && isWavy(segment)) || isSlash(segment)) keep.add(segment);
   }
   // A slash or zipper line runs on through the lines it crosses; follow it.
   const queue = [...keep];
@@ -742,26 +741,47 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       if (!chain.includes(head) && !keep.has(head) && units(head) <= MARK_RULES.arrowHeadMax && freeEnds(head).length) marked.add(head);
     }
   }
-  // A line cut by the edge of the area comes from a note outside it. If it ends on a drawing
-  // line in a T (the drawing line runs on both ways) it is a leader; a line that turns a corner
-  // there is the drawing itself.
+  // A line cut by the edge of the area comes from a note outside it. Follow it straight on:
+  // if it meets a drawing line (in a T, or crossing it to point at the stitching just inside)
+  // and stops soon after, it is a leader. A line that turns a corner, or runs on far past a
+  // crossing, is the drawing itself.
   const leaders = new Set<Segment>();
-  const endsInT = (from: Segment, node: number): boolean => {
+  const lineThrough = (from: Segment, node: number): boolean => {
     const own = direction(from, node, reach, width);
     const others = (atNode.get(node) ?? []).filter(other => other !== from);
     return others.some((a, i) => others.slice(i + 1).some(b => alignment(a, b, node) > Math.cos(MARK_RULES.crossAngle * Math.PI / 180)
       && lineAngle(own, direction(a, node, reach, width)) >= MARK_RULES.crossAngle));
   };
+  const borderLeader = (start: Segment, from: number): Segment[] | undefined => {
+    const chain: Segment[] = [];
+    let current = start;
+    let at = from;
+    let met = false;
+    let past = 0;
+    for (let hops = 0; hops < 8; hops += 1) {
+      if (keep.has(current)) return undefined;
+      // Past the drawing line only a short tail may follow, pointing at the stitching there.
+      if (met) {
+        past += units(current);
+        if (past > MARK_RULES.slashMax) return undefined;
+      } else if (isDash(current) || straightness(current, width) < MARK_RULES.slashStraight) return undefined;
+      chain.push(current);
+      const far = otherNode(current, at);
+      if (isEnd(far)) break;
+      if (lineThrough(current, far)) met = true;
+      const next = straightOnAt(current, far, direction(current, far, reach, width));
+      if (!next || chain.includes(next)) break;
+      current = next;
+      at = far;
+    }
+    const total = chain.reduce((sum, piece) => sum + units(piece), 0);
+    return met && total <= MARK_RULES.leaderMax ? chain : undefined;
+  };
   for (const segment of segments) {
     if (keep.has(segment) || marked.has(segment)) continue;
     for (const [node, point] of freeEnds(segment)) {
       if (!nearBorder(point)) continue;
-      const chain = traceLeader(segment, node);
-      if (!chain || chain.reduce((sum, piece) => sum + units(piece), 0) > MARK_RULES.leaderMax) continue;
-      let tip = node;
-      for (const piece of chain) tip = otherNode(piece, tip);
-      if (!endsInT(chain[chain.length - 1], tip)) continue;
-      for (const piece of chain) { marked.add(piece); leaders.add(piece); }
+      for (const piece of borderLeader(segment, node) ?? []) { marked.add(piece); leaders.add(piece); }
     }
   }
   // Arrows with no note: two short straight strokes meeting at a tip with a shaft behind them.

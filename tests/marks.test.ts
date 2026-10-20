@@ -237,18 +237,15 @@ describe('wider leader candidates', () => {
     expect(selected(mask, target, 150, 200)).toBe(false);
   });
 
-  it('selects a trembling leader at the edge of the area instead of keeping it as a zipper line', () => {
+  it('selects a short leader from the edge that crosses the outline like a stitch-end slash', () => {
     const target = canvas(240, 240);
-    stroke(target, 60, 5, 60, 235);
-    let [px, py] = [239, 40];
-    for (let x = 238; x >= 63; x -= 1) {
-      const y = 40 + (239 - x) * 0.5 + 6 * Math.sin(x / 5);
-      stroke(target, px, py, x, y, { thickness: 3 });
-      [px, py] = [x, y];
-    }
+    stroke(target, 200, 5, 200, 235);
+    dashes(target, 185, 5, 185, 235);
+    stroke(target, 239, 100, 178, 110, { thickness: 3 });
     const mask = run(target);
-    expect(selected(mask, target, 150, Math.round(40 + 89 * 0.5 + 6 * Math.sin(30)))).toBe(true);
-    expect(selected(mask, target, 60, 200)).toBe(false);
+    expect(selected(mask, target, 222, 96)).toBe(true);
+    expect(selected(mask, target, 200, 40)).toBe(false);
+    expect(selected(mask, target, 200, 200)).toBe(false);
   });
 
   it('selects a leader whose free end lines up with a stroke of the note like the next dash', () => {
