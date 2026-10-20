@@ -65,16 +65,16 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   await import('../src/renderer/main');
 
   const stage = document.querySelector<HTMLElement>('#stage')!;
-  const pointer = (type: string, x: number, y: number) => {
-    const event = new MouseEvent(type, { clientX: OFFSET.x + x, clientY: OFFSET.y + y, button: 0, bubbles: true, cancelable: true });
+  const pointer = (type: string, x: number, y: number, init: MouseEventInit = {}) => {
+    const event = new MouseEvent(type, { clientX: OFFSET.x + x, clientY: OFFSET.y + y, button: 0, bubbles: true, cancelable: true, ...init });
     Object.defineProperty(event, 'pointerId', { value: 1 });
     stage.dispatchEvent(event);
   };
-  const drag = (from: [number, number], to: [number, number]) => {
-    pointer('pointerdown', ...from);
-    pointer('pointermove', (from[0] + to[0]) / 2, (from[1] + to[1]) / 2);
-    pointer('pointermove', ...to);
-    pointer('pointerup', ...to);
+  const drag = (from: [number, number], to: [number, number], init: MouseEventInit = {}) => {
+    pointer('pointerdown', ...from, init);
+    pointer('pointermove', (from[0] + to[0]) / 2, (from[1] + to[1]) / 2, init);
+    pointer('pointermove', ...to, init);
+    pointer('pointerup', ...to, init);
   };
   const key = (value: string, init: KeyboardEventInit = {}) => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...init }));
   const savedAt = (x: number, y: number) => [...project!.snapshot.working.data.slice((y * 24 + x) * 4, (y * 24 + x) * 4 + 4)];
@@ -144,6 +144,32 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   key('Delete');
   await new Promise(resolve => setTimeout(resolve, 50));
   expect(savedAt(21, 11)).toEqual(GRAY);
+
+  // Shift-drag adds and Alt-drag subtracts, as in Photoshop. A key held from the start
+  // combines selections; it does not also square or center the marquee.
+  key('m');
+  drag([13, 10], [17, 13]);
+  drag([19, 10], [23, 12], { shiftKey: true });
+  drag([15, 10], [20, 14], { altKey: true });
+  key('Delete');
+  await waitSaved(13, 11, WHITE);
+  expect(savedAt(14, 11)).toEqual(WHITE);
+  expect(savedAt(16, 11)).toEqual(GRAY);
+  expect(savedAt(19, 11)).toEqual(GRAY);
+  expect(savedAt(21, 11)).toEqual(WHITE);
+  expect(savedAt(21, 13)).toEqual(GRAY);
+  // P: the key held on the first point decides; Shift adds the path, Alt subtracts it.
+  key('p');
+  for (const [x, y] of [[0, 13], [0, 16], [24, 16], [24, 13]] as const) { pointer('pointerdown', x, y, { shiftKey: true }); pointer('pointerup', x, y); }
+  key('Enter');
+  for (const [x, y] of [[12, 13], [12, 16], [24, 16], [24, 13]] as const) { pointer('pointerdown', x, y, { altKey: true }); pointer('pointerup', x, y); }
+  key('Enter');
+  // A Shift-click without a drag keeps the selection instead of clearing it.
+  key('m');
+  pointer('pointerdown', 2, 14, { shiftKey: true }); pointer('pointerup', 2, 14, { shiftKey: true });
+  key('Delete');
+  await waitSaved(3, 14, WHITE);
+  expect(savedAt(16, 14)).toEqual(GRAY);
 
   expect(workerJobs.slice(jobsBefore)).toEqual([]);
 }, 30_000);
