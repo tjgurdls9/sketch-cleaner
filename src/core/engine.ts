@@ -1,5 +1,6 @@
 import { MAX_PIXELS, type Pixels, type Snapshot } from '../shared/types';
 import { autoCleanDraft } from './automatic';
+import { paperColorAt } from './paper';
 
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -10,7 +11,8 @@ export type LassoMode = 'inside' | 'outside';
 export type SelectionCombine = 'replace' | 'add' | 'subtract';
 export interface Affine { a: number; b: number; c: number; d: number; e: number; f: number }
 export interface ViewTransform { zoom: number; panX: number; panY: number }
-export type Fill = { kind: 'white' } | { kind: 'sample'; point: Point };
+/** White, a colour sampled at a point, or the surrounding paper (see paper.ts). */
+export type Fill = { kind: 'white' } | { kind: 'sample'; point: Point } | { kind: 'paper' };
 export interface Tone { brightness: number; contrast: number }
 export type PixelProgress = (completed: number, total: number) => void;
 
@@ -419,6 +421,16 @@ function selectedEdit(snapshot: Snapshot, candidateAt: (x: number, y: number, ou
   return changed ? withVersion(snapshot, { working: { ...snapshot.working, data: working } }) : snapshot;
 }
 
+/** The fill colour at each pixel; `exclude` marks the ink being erased, left out of the paper. */
+function fillColorAt(snapshot: Snapshot, fill: Fill, exclude?: Uint8Array): (x: number, y: number) => readonly number[] {
+  if (fill?.kind === 'paper') {
+    const paper = paperColorAt(snapshot.working.data, snapshot.working.width, snapshot.working.height, exclude);
+    return (x, y) => [...paper(x, y), 255];
+  }
+  const color = fillColor(snapshot, fill);
+  return () => color;
+}
+
 function fillColor(snapshot: Snapshot, fill: Fill): number[] {
   if (fill?.kind === 'white') return [255, 255, 255, 255];
   if (fill?.kind !== 'sample') throw new TypeError('Invalid fill');
@@ -430,8 +442,9 @@ function fillColor(snapshot: Snapshot, fill: Fill): number[] {
 
 export function fillSelection(snapshot: Snapshot, fill: Fill, progress?: PixelProgress): Snapshot {
   validateSnapshot(snapshot);
-  const color = fillColor(snapshot, fill);
-  return selectedEdit(snapshot, (_x, _y, output) => {
+  const colorAt = fillColorAt(snapshot, fill, snapshot.deleteMask);
+  return selectedEdit(snapshot, (x, y, output) => {
+    const color = colorAt(x, y);
     output[0] = color[0]; output[1] = color[1]; output[2] = color[2]; output[3] = color[3];
     return true;
   }, progress);
@@ -442,7 +455,7 @@ export function eraseStroke(snapshot: Snapshot, points: readonly Point[], brush:
   validateSnapshot(snapshot);
   validateBrush(brush);
   validatePoints(points);
-  const color = fillColor(snapshot, fill);
+  const colorAt = fillColorAt(snapshot, fill);
   if (brush.strength === 0) return snapshot;
   const { width } = snapshot.working;
   const { bounds, coverage, total } = rasterizeStroke(points, brush, width, snapshot.working.height, progress);
@@ -452,7 +465,7 @@ export function eraseStroke(snapshot: Snapshot, points: readonly Point[], brush:
     for (let column = 0; column < bounds.width; column++) {
       const index = (bounds.y + row) * width + bounds.x + column;
       const amount = (coverage[row * bounds.width + column] / 255) * brush.strength * (1 - snapshot.protectMask[index] / 255);
-      if (!amount || !mixedPixel(snapshot.working.data, index * 4, color, amount, blended)) continue;
+      if (!amount || !mixedPixel(snapshot.working.data, index * 4, colorAt(bounds.x + column, bounds.y + row), amount, blended)) continue;
       if (working === snapshot.working.data) working = snapshot.working.data.slice();
       working.set(blended, index * 4);
     }
