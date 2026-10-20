@@ -540,8 +540,9 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     const free = isEnd(a) ? a : isEnd(b) ? b : -1;
     const junction = free === a ? b : a;
     if (free < 0 || isEnd(junction) || units(segment) < MARK_RULES.slashMin || units(segment) > MARK_RULES.slashMax) return false;
-    // A short line whose free end touches writing is a leader to that note, not a stitch end.
-    if (nearText(freeEnds(segment)[0][1])) return false;
+    // A short line whose free end touches writing, or runs out to the edge of the area where
+    // the notes are, is a leader to that note, not a stitch end.
+    if (nearText(freeEnds(segment)[0][1]) || nearBorder(freeEnds(segment)[0][1])) return false;
     if (straightness(segment, width) < MARK_RULES.slashStraight) return false;
     const own = direction(segment, junction, reach, width);
     // Stitch-end slashes cross a real drawing line, not a loop or a scribble.
@@ -571,7 +572,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       if (isEnd(node)) continue;
       const next = straightOn(segment, node);
       if (!next || keep.has(next)) continue;
-      if (freeEnds(next).some(([, point]) => nearText(point))) continue;
+      if (freeEnds(next).some(([, point]) => nearText(point) || nearBorder(point))) continue;
       if (share(next, text) >= 0.5) continue;
       const nextWavy = isWavy(next);
       if (!nextWavy && units(next) > MARK_RULES.slashMax) continue;
@@ -759,8 +760,9 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     let met = false;
     let past = 0;
     for (let hops = 0; hops < 8; hops += 1) {
-      if (keep.has(current)) return undefined;
-      // Past the drawing line only a short tail may follow, pointing at the stitching there.
+      // Past the drawing line only a short tail may follow, pointing at the stitching there;
+      // that tail can look like a stitch-end slash.
+      if (keep.has(current) && !met) return undefined;
       if (met) {
         past += units(current);
         if (past > MARK_RULES.slashMax) return undefined;
@@ -781,7 +783,7 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     if (keep.has(segment) || marked.has(segment)) continue;
     for (const [node, point] of freeEnds(segment)) {
       if (!nearBorder(point)) continue;
-      for (const piece of borderLeader(segment, node) ?? []) { marked.add(piece); leaders.add(piece); }
+      for (const piece of borderLeader(segment, node) ?? []) { marked.add(piece); leaders.add(piece); keep.delete(piece); }
     }
   }
   // Arrows with no note: two short straight strokes meeting at a tip with a shaft behind them.

@@ -243,7 +243,7 @@ describe('wider leader candidates', () => {
     dashes(target, 185, 5, 185, 235);
     stroke(target, 239, 100, 178, 110, { thickness: 3 });
     const mask = run(target);
-    expect(selected(mask, target, 222, 96)).toBe(true);
+    expect(selected(mask, target, 222, 103)).toBe(true);
     expect(selected(mask, target, 200, 40)).toBe(false);
     expect(selected(mask, target, 200, 200)).toBe(false);
   });
@@ -257,6 +257,18 @@ describe('wider leader candidates', () => {
     writing(target, 204, 6, 239, 40);
     const mask = run(target);
     expect(selected(mask, target, 130, 80)).toBe(true);
+    expect(selected(mask, target, 60, 40)).toBe(false);
+    expect(selected(mask, target, 60, 170)).toBe(false);
+  });
+  it('selects a leader that ends by strokes of the note just outside the detected writing', () => {
+    const target = canvas(240, 200);
+    stroke(target, 60, 5, 60, 195);
+    stroke(target, 63, 120, 180, 50, { thickness: 3 });
+    stroke(target, 186, 46, 210, 32, { thickness: 3 }); // arrowhead stroke reaching into the note
+    stroke(target, 214, 14, 232, 14, { thickness: 3 });
+    writing(target, 198, 6, 239, 40);
+    const mask = run(target);
+    expect(selected(mask, target, 120, 86)).toBe(true);
     expect(selected(mask, target, 60, 40)).toBe(false);
     expect(selected(mask, target, 60, 170)).toBe(false);
   });
