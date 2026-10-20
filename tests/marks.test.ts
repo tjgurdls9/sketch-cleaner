@@ -84,7 +84,7 @@ describe('note candidates inside a figure', () => {
     expect(selected(mask, target, 120, 160)).toBe(false);
   });
 
-  it('selects a small detached scribble but leaves a lone straight tick', () => {
+  it('selects a small detached scribble and, erring on the side of selecting, a lone straight tick', () => {
     const target = canvas(200, 200);
     stroke(target, 20, 5, 20, 195);
     for (let angle = 0; angle < Math.PI * 2; angle += 0.05) stroke(target, 100 + 9 * Math.cos(angle), 100 + 9 * Math.sin(angle), 100 + 9 * Math.cos(angle + 0.05), 100 + 9 * Math.sin(angle + 0.05), { thickness: 3 });
@@ -92,8 +92,36 @@ describe('note candidates inside a figure', () => {
     stroke(target, 150, 150, 160, 170, { thickness: 3 });
     const mask = run(target);
     expect(selected(mask, target, 91, 100)).toBe(true);
-    expect(selected(mask, target, 155, 160)).toBe(false);
+    expect(selected(mask, target, 155, 160)).toBe(true);
     expect(selected(mask, target, 20, 100)).toBe(false);
+  });
+
+  it('selects short marks hanging off a drawing line but keeps short pieces that join two drawing lines', () => {
+    const target = canvas(240, 240);
+    stroke(target, 60, 10, 60, 230);
+    stroke(target, 180, 10, 180, 230);
+    stroke(target, 60, 120, 180, 120); // a short-ish crossbar joining both lines (a waistband end)
+    stroke(target, 60, 60, 80, 50); stroke(target, 80, 50, 90, 62); // a hook drawn on the seam
+    stroke(target, 180, 180, 196, 172, { thickness: 3 }); stroke(target, 196, 172, 200, 190, { thickness: 3 }); // a bent mark on the seam
+    const mask = run(target);
+    expect(selected(mask, target, 80, 52)).toBe(true);
+    expect(selected(mask, target, 194, 175)).toBe(true);
+    expect(selected(mask, target, 120, 120)).toBe(false);
+    expect(selected(mask, target, 60, 30)).toBe(false);
+    expect(selected(mask, target, 180, 30)).toBe(false);
+  });
+
+  it('selects an arrow with no note: its shaft and both arrowhead strokes', () => {
+    const target = canvas(260, 220);
+    stroke(target, 40, 10, 40, 210);
+    // A bent arrow drawn in blank paper: from the right, left, then sharply up-right to a tip.
+    stroke(target, 240, 150, 120, 150); stroke(target, 120, 150, 170, 80);
+    stroke(target, 170, 80, 152, 84, { thickness: 3 }); stroke(target, 170, 80, 166, 98, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 200, 150)).toBe(true);
+    expect(selected(mask, target, 145, 115)).toBe(true);
+    expect(selected(mask, target, 158, 84)).toBe(true);
+    expect(selected(mask, target, 40, 100)).toBe(false);
   });
 
   it('selects a coloured solid line and keeps coloured dashes', () => {
@@ -113,6 +141,52 @@ describe('note candidates inside a figure', () => {
     const mask = run(target);
     expect(selected(mask, target, 100, 100)).toBe(false);
     expect(selected(mask, target, 140, 204)).toBe(true);
+  });
+
+  it('selects a scissor mark (slash with a curl) but keeps a clean stitch-end slash', () => {
+    const target = canvas(260, 240);
+    stroke(target, 60, 10, 60, 230);
+    stroke(target, 180, 10, 180, 230);
+    stroke(target, 45, 110, 75, 80); // a clean stitch-end slash
+    stroke(target, 165, 110, 195, 80); // scissor slash ...
+    for (let x = 0; x < 26; x += 1) stroke(target, 183 + x, 98 + 4 * Math.sin(x / 3), 184 + x, 98 + 4 * Math.sin((x + 1) / 3), { thickness: 3 }); // ... with a curl
+    const mask = run(target);
+    expect(selected(mask, target, 200, 98)).toBe(true);
+    expect(selected(mask, target, 190, 85)).toBe(true);
+    expect(selected(mask, target, 70, 85)).toBe(false);
+    expect(selected(mask, target, 180, 200)).toBe(false);
+  });
+
+  it('keeps a small closed detail on the drawing, such as a belt loop, and a lone straight stitch segment', () => {
+    const target = canvas(260, 200);
+    stroke(target, 10, 40, 250, 40);
+    stroke(target, 10, 80, 250, 80);
+    stroke(target, 100, 40, 100, 95); stroke(target, 112, 40, 112, 95); stroke(target, 100, 95, 112, 95); // belt loop
+    stroke(target, 40, 150, 100, 150); // a lone straight stitch segment
+    const mask = run(target);
+    expect(selected(mask, target, 100, 88)).toBe(false);
+    expect(selected(mask, target, 106, 95)).toBe(false);
+    expect(selected(mask, target, 70, 150)).toBe(false);
+  });
+
+  it('keeps coloured stitching that runs beside a black seam, selects a coloured line away from seams', () => {
+    const target = canvas(260, 200);
+    stroke(target, 10, 40, 250, 40);
+    stroke(target, 10, 52, 250, 52, { colored: true, thickness: 3 });
+    stroke(target, 10, 150, 250, 150, { colored: true, thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 130, 52)).toBe(false);
+    expect(selected(mask, target, 130, 150)).toBe(true);
+  });
+
+  it('selects wiggly handwriting inside a text area instead of keeping it as a zipper line', () => {
+    const target = canvas(260, 200);
+    stroke(target, 20, 10, 20, 190);
+    for (let x = 60; x < 200; x += 1) stroke(target, x, 100 + 6 * Math.sin(x / 5), x + 1, 100 + 6 * Math.sin((x + 1) / 5), { thickness: 3 });
+    writing(target, 50, 85, 210, 115);
+    const mask = run(target);
+    expect(selected(mask, target, 130, 100, 7)).toBe(true);
+    expect(selected(mask, target, 20, 100)).toBe(false);
   });
 
   it('returns an empty mask for blank paper', () => {
