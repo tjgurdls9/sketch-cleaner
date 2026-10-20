@@ -127,6 +127,7 @@ kbd { display: inline-block; min-width: 16px; padding: 2px 4px; border: 1px soli
 .stage[data-tool="pan"] { cursor: grab; }
 .stage.is-panning { cursor: grabbing; }
 .stage[data-tool="crop"] { cursor: crosshair; }
+.stage[data-tool="line"] { cursor: crosshair; }
 .stage[data-tool="sample"] { cursor: copy; }
 .empty-state { position: absolute; z-index: 2; inset: 0; overflow: auto; display: flex; align-items: center; justify-content: center; gap: clamp(24px, 5vw, 66px); padding: 25px; }
 .empty-card { width: min(340px, 52%); text-align: center; }

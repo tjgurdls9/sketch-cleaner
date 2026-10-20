@@ -8,15 +8,16 @@ import type {
   Candidate, ExportResult, ImportedImage, Pixels, Project, RecentProject,
   Reply, RequestBundle, RequestInfo, Snapshot,
 } from '../shared/types';
+import { selectLineAt } from '../core/line-pick';
 import { MAX_FILE_BYTES, MAX_PIXELS } from '../shared/types';
 import type { PixelJobRequest, PixelJobResponse } from '../core/worker-protocol';
 import { candidateReadiness, fitCandidateTransform } from './state';
 
-type Tool = 'erase' | 'marquee' | 'pen' | 'delete' | 'protect' | 'unselect' | 'restore' | 'lasso' | 'pan' | 'crop' | 'sample';
+type Tool = 'erase' | 'marquee' | 'pen' | 'line' | 'delete' | 'protect' | 'unselect' | 'restore' | 'lasso' | 'pan' | 'crop' | 'sample';
 
 const BRUSH_TOOLS: readonly Tool[] = ['erase', 'delete', 'protect', 'unselect', 'restore'];
-const SELECTION_TOOLS: readonly Tool[] = ['marquee', 'pen', 'lasso'];
-const TOOL_KEYS: Readonly<Record<string, Tool>> = { e: 'erase', m: 'marquee', p: 'pen', l: 'lasso' };
+const SELECTION_TOOLS: readonly Tool[] = ['marquee', 'pen', 'line', 'lasso'];
+const TOOL_KEYS: Readonly<Record<string, Tool>> = { e: 'erase', m: 'marquee', p: 'pen', w: 'line', l: 'lasso' };
 const PEN_CLOSE_DISTANCE = 8;
 const BRUSH_SIZE_MIN = 2;
 const BRUSH_SIZE_MAX = 220;
@@ -873,6 +874,14 @@ function addPenPoint(point: Point, event: MouseEvent): void {
   draftPoints = [...draftPoints, point];
 }
 
+function pickLine(point: Point, combine: SelectionCombine): void {
+  applyNow(snapshot => {
+    const next = selectLineAt(snapshot, point, combine);
+    if (next === snapshot) announce('클릭한 곳에서 선을 찾지 못했습니다.');
+    return next;
+  }, '선을 선택하지 못했습니다.');
+}
+
 function deselect(): void {
   applyNow(snapshot => {
     const { width, height } = snapshot.working;
@@ -948,6 +957,10 @@ function pointerDown(event: PointerEvent): void {
     gesture = 'crop';
     draftKind = 'crop';
     draftPoints = [imagePoint(screen)];
+  } else if (state.panel === 'edit' && state.tool === 'line') {
+    pickLine(imagePoint(screen), combineFor(event));
+    event.preventDefault();
+    return;
   } else if (state.panel === 'edit' && state.tool === 'pen') {
     addPenPoint(imagePoint(screen), event);
     event.preventDefault();
@@ -1334,6 +1347,7 @@ function setTool(tool: Tool): void {
   const hints: Record<Tool, string> = {
     erase: '드래그하는 곳을 바로 지웁니다. 파랑 보호 영역은 지워지지 않습니다. [ ]로 크기 조절.',
     marquee: '드래그해 사각형으로 선택하고 Delete로 지우세요. Shift를 누르고 시작하면 더하기, Alt는 빼기. 드래그 중 Shift 정사각형, Alt 중심 기준.',
+    line: '선을 클릭하면 끊긴 부분까지 그 선만 선택합니다. Shift 클릭 더하기, Alt 클릭 빼기. Delete로 지우세요.',
     pen: '점을 찍어 직선으로 두르고 첫 점이나 Enter로 닫으세요. 첫 점을 Shift로 찍으면 더하기, Alt는 빼기. Backspace 한 점 취소, Esc 취소.',
     delete: '바꿔도 되는 영역을 드래그해 표시하세요.',
     protect: '남길 선과 부분을 드래그해 보호하세요.',
