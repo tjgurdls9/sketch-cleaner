@@ -31,7 +31,9 @@ function findLines(cells: readonly number[], removed: Uint8Array, gridWidth: num
   const across = horizontal ? (cell: number): number => (cell / gridWidth) | 0 : (cell: number): number => cell % gridWidth;
   const position = horizontal ? (cell: number): number => cell % gridWidth : (cell: number): number => (cell / gridWidth) | 0;
   const offset = Math.ceil(along * Math.sin(MAX_TILT)) + 2;
-  const bins = along + offset * 2 + 2;
+  // Projection bins span the perpendicular axis; `along` only controls the tilt margin.
+  const acrossLength = horizontal ? removed.length / gridWidth : gridWidth;
+  const bins = acrossLength + offset * 2 + 2;
   const votes = angles.map(() => new Int32Array(bins));
   const binOf = (cell: number, angle: number): number => Math.round(across(cell) * Math.cos(angle) - position(cell) * Math.sin(angle)) + offset;
   const member = new Uint8Array(removed.length);
