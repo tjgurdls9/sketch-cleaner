@@ -1991,12 +1991,11 @@ function bindEvents(): void {
   document.addEventListener('click', event => {
     if (!$('#projectMenu').contains(event.target as Node) && event.target !== $('#moreMenuButton')) $('#projectMenu').setAttribute('hidden', '');
   });
+  // The main process asks the person; confirm() is blocked while unloading.
   window.addEventListener('beforeunload', event => {
     if (!state.dirty && !pendingSave && !state.saveFailed && !worker) return;
-    if (!window.confirm('저장되지 않은 변경사항이 있습니다. 마지막 정상 저장본을 보존하고 앱을 닫을까요?')) {
-      event.preventDefault();
-      event.returnValue = '';
-    }
+    event.preventDefault();
+    event.returnValue = '';
   });
   const observer = new ResizeObserver(() => {
     window.cancelAnimationFrame(resizeFrame);
@@ -2007,7 +2006,10 @@ function bindEvents(): void {
 
 function undo(): void {
   if (!state.history) return;
-  state.history = undoHistory(state.history);
+  const next = undoHistory(state.history);
+  // Nothing to undo: leave the work as saved.
+  if (next === state.history) return;
+  state.history = next;
   state.snapshot = historySnapshot(state.history);
   state.adjustmentPreview = null;
   state.dirty = true;
@@ -2022,7 +2024,10 @@ function undo(): void {
 
 function redo(): void {
   if (!state.history) return;
-  state.history = redoHistory(state.history);
+  const next = redoHistory(state.history);
+  // Nothing to redo: leave the work as saved.
+  if (next === state.history) return;
+  state.history = next;
   state.snapshot = historySnapshot(state.history);
   state.adjustmentPreview = null;
   state.dirty = true;

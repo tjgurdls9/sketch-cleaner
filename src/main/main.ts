@@ -193,6 +193,15 @@ function createWindow(): void {
     if (url !== pathToFileURL(rendererEntry).href) event.preventDefault();
   });
   window.webContents.on('will-redirect', event => event.preventDefault());
+  // Chromium blocks confirm() inside beforeunload, so the page can only veto the unload; ask here.
+  window.webContents.on('will-prevent-unload', event => {
+    const choice = dialog.showMessageBoxSync(window, {
+      type: 'warning', buttons: ['닫기', '취소'], defaultId: 1, cancelId: 1, title: 'Sketch Cleaner',
+      message: '저장되지 않은 변경사항이 있습니다. 앱을 닫을까요?',
+      detail: '마지막 정상 저장본은 보존됩니다.',
+    });
+    if (choice === 0) event.preventDefault();
+  });
   window.on('closed', () => { textDetection.dispose(); if (mainWindow === window) mainWindow = null; });
   void window.loadFile(rendererEntry);
 }
