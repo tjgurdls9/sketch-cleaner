@@ -455,10 +455,18 @@ export function eraseStroke(snapshot: Snapshot, points: readonly Point[], brush:
   validateSnapshot(snapshot);
   validateBrush(brush);
   validatePoints(points);
-  const colorAt = fillColorAt(snapshot, fill);
   if (brush.strength === 0) return snapshot;
   const { width } = snapshot.working;
   const { bounds, coverage, total } = rasterizeStroke(points, brush, width, snapshot.working.height, progress);
+  // The ink under the stroke is what is being erased: leave it out of the paper measurement.
+  let erasing: Uint8Array | undefined;
+  if (fill?.kind === 'paper') {
+    erasing = new Uint8Array(width * snapshot.working.height);
+    for (let row = 0; row < bounds.height; row++) {
+      for (let column = 0; column < bounds.width; column++) if (coverage[row * bounds.width + column]) erasing[(bounds.y + row) * width + bounds.x + column] = 255;
+    }
+  }
+  const colorAt = fillColorAt(snapshot, fill, erasing);
   let working = snapshot.working.data;
   const blended = [0, 0, 0, 0];
   for (let row = 0; row < bounds.height; row++) {

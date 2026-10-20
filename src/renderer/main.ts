@@ -821,7 +821,7 @@ function paintColorSwatch(canvas: HTMLCanvasElement, color: [number, number, num
 }
 
 function eraserFill(): Fill {
-  return state.sampledPoint ? { kind: 'sample', point: state.sampledPoint } : { kind: 'white' };
+  return state.sampledPoint ? { kind: 'sample', point: state.sampledPoint } : { kind: 'paper' };
 }
 
 /** Photoshop-style edits run on the main thread: a worker would clone the whole snapshot both ways. */
@@ -891,7 +891,8 @@ function deselect(): void {
 
 function deleteSelection(): void {
   if (state.panel !== 'edit') return;
-  applyNow(snapshot => fillSelection(snapshot, { kind: 'white' }), '선택 영역을 지우지 못했습니다.');
+  // Erase to the surrounding paper, so no white patch shows on cream or yellow sheets.
+  applyNow(snapshot => fillSelection(snapshot, { kind: 'paper' }), '선택 영역을 지우지 못했습니다.');
 }
 
 function stepBrushSize(direction: 1 | -1): void {
@@ -1777,7 +1778,7 @@ async function panelAction(action: string, target: HTMLElement): Promise<void> {
   switch (action) {
     case 'auto-clean': await runAutomaticCleanup(); break;
     case 'go-export': setPanel('export'); break;
-    case 'fill-white': await fillCurrentSelection({ kind: 'white' }); break;
+    case 'fill-white': await fillCurrentSelection({ kind: 'paper' }); break;
     case 'fill-sample': if (state.sampledPoint) await fillCurrentSelection({ kind: 'sample', point: state.sampledPoint }); break;
     case 'select-all': await setWholeImageSelection(true); break;
     case 'clear-selection': await setWholeImageSelection(false); break;
@@ -1809,7 +1810,7 @@ async function withBridge<T>(operation: () => Promise<Reply<T>>, context: string
   catch (error) { showError(safeTextError(error, context)); }
 }
 
-async function fillCurrentSelection(fill: { kind: 'white' } | { kind: 'sample'; point: Point }): Promise<void> {
+async function fillCurrentSelection(fill: Fill): Promise<void> {
   if (!state.snapshot) return;
   const snapshot = state.snapshot;
   const token = captureEditToken(snapshot);

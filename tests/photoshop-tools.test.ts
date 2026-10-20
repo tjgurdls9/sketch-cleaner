@@ -6,7 +6,9 @@ import type { PixelJobRequest, PixelJobResponse } from '../src/core/worker-proto
 import type { DesktopAPI, Pixels, Project, Reply, Snapshot } from '../src/shared/types';
 
 const GRAY = [120, 120, 120, 255];
-const WHITE = [255, 255, 255, 255];
+// Erasing fills with the surrounding paper; the photo is paper with ink only at the probes.
+const PAPER = [248, 246, 238, 255];
+const PROBES = [[10, 3], [11, 3], [12, 0], [12, 8], [13, 11], [14, 11], [16, 11], [16, 14], [19, 11], [20, 2], [21, 11], [21, 13], [22, 5], [3, 14], [3, 3], [5, 11]];
 // index.html stage is mocked to 320x240; a 24x16 image fits at zoom 1 with this offset.
 const OFFSET = { x: 148, y: 112 };
 
@@ -46,7 +48,8 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
 
   const photo = (): Pixels => {
     const data = new Uint8ClampedArray(24 * 16 * 4);
-    for (let i = 0; i < data.length; i += 4) data.set(GRAY, i);
+    for (let i = 0; i < data.length; i += 4) data.set(PAPER, i);
+    for (const [x, y] of PROBES) data.set(GRAY, (y * 24 + x) * 4);
     return { width: 24, height: 16, data };
   };
   const id = '11111111-1111-4111-8111-111111111111';
@@ -98,13 +101,13 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   const versionBefore = project!.snapshot.workVersion;
   drag([0.5, 8.5], [23.5, 8.5]);
   expect(overlay.hasAttribute('hidden')).toBe(true);
-  await waitSaved(12, 8, WHITE);
+  await waitSaved(12, 8, PAPER);
   expect(savedAt(12, 0)).toEqual(GRAY);
   expect(project!.snapshot.workVersion).toBe(versionBefore + 1);
   key('z', { metaKey: true });
   await waitSaved(12, 8, GRAY);
   key('z', { metaKey: true, shiftKey: true });
-  await waitSaved(12, 8, WHITE);
+  await waitSaved(12, 8, PAPER);
 
   // A focused slider must not swallow tool letters (focus stays there after dragging it).
   size.focus();
@@ -116,7 +119,7 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   drag([2, 2], [6, 6]);
   key('Delete');
   expect(overlay.hasAttribute('hidden')).toBe(true);
-  await waitSaved(3, 3, WHITE);
+  await waitSaved(3, 3, PAPER);
   expect(savedAt(10, 3)).toEqual(GRAY);
   drag([10, 2], [14, 6]);
   key('d', { ctrlKey: true });
@@ -130,14 +133,14 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   key('Backspace');
   pointer('pointerdown', 16, 1); pointer('pointerup', 16, 1);
   key('Backspace');
-  await waitSaved(20, 2, WHITE);
+  await waitSaved(20, 2, PAPER);
   expect(savedAt(22, 5)).toEqual(GRAY);
 
   // P with Enter, then Esc cancels an unfinished path without touching pixels.
   for (const [x, y] of [[1, 10], [6, 10], [6, 14]] as const) { pointer('pointerdown', x, y); pointer('pointerup', x, y); }
   key('Enter');
   key('Backspace');
-  await waitSaved(5, 11, WHITE);
+  await waitSaved(5, 11, PAPER);
   for (const [x, y] of [[18, 10], [22, 10], [22, 14]] as const) { pointer('pointerdown', x, y); pointer('pointerup', x, y); }
   key('Escape');
   key('Enter');
@@ -158,11 +161,11 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   drag([19, 10], [23, 12], { shiftKey: true });
   drag([15, 10], [20, 14], { altKey: true });
   key('Delete');
-  await waitSaved(13, 11, WHITE);
-  expect(savedAt(14, 11)).toEqual(WHITE);
+  await waitSaved(13, 11, PAPER);
+  expect(savedAt(14, 11)).toEqual(PAPER);
   expect(savedAt(16, 11)).toEqual(GRAY);
   expect(savedAt(19, 11)).toEqual(GRAY);
-  expect(savedAt(21, 11)).toEqual(WHITE);
+  expect(savedAt(21, 11)).toEqual(PAPER);
   expect(savedAt(21, 13)).toEqual(GRAY);
   // P: the key held on the first point decides; Shift adds the path, Alt subtracts it.
   key('p');
@@ -174,7 +177,7 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   key('m');
   pointer('pointerdown', 2, 14, { shiftKey: true }); pointer('pointerup', 2, 14, { shiftKey: true });
   key('Delete');
-  await waitSaved(3, 14, WHITE);
+  await waitSaved(3, 14, PAPER);
   expect(savedAt(16, 14)).toEqual(GRAY);
 
   expect(workerJobs.slice(jobsBefore)).toEqual([]);
