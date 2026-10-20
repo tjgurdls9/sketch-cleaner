@@ -1,5 +1,6 @@
 import type { Snapshot } from '../shared/types';
-import { findAnnotationInk } from './marks';
+import { findAnnotationInk, type MarkStats } from './marks';
+import { growIntoHalo } from './halo';
 import { findRuledLines, splitRuledComponent, type RuledLine } from './ruled';
 
 export const MAX_AUTO_ANALYSIS_PIXELS = 1_000_000;
@@ -164,6 +165,8 @@ function componentIsGarment(bounds: Bounds, analysisWidth: number, analysisHeigh
     && aspect >= 0.18 && aspect <= 1.7
     && density >= 0.012 && density <= 0.5;
 }
+
+const HALO_MIN_RADIUS = 2;
 
 /** Share of the analysis grid within which a part counts as touching that edge of the photo. */
 const FRAME_EDGE_SHARE = 0.02;
@@ -381,28 +384,25 @@ function figureCandidates(snapshot: Snapshot, anchors: readonly { bounds: Bounds
         if (text && textMask?.[index] === 255) text[cell] = 255;
       }
     }
-    const notes = findAnnotationInk({ ink, colored, text }, cropWidth, cropHeight);
+    const markStats: MarkStats = { strokeWidth: 0, kept: 0, candidates: 0 };
+    const keptCells = new Uint8Array(cropWidth * cropHeight);
+    const notes = findAnnotationInk({ ink, colored, text }, cropWidth, cropHeight, markStats, keptCells);
+    const keptLines = new Uint8Array(width * height);
     const mask: Uint8Array = result ?? new Uint8Array(width * height);
-    result = mask;
     for (let y = top; y < bottom; y += 1) {
       for (let x = left; x < right; x += 1) {
         const index = y * width + x;
         const kind = pixelKind(data, index * 4);
         const cell = ((y - top) / scale | 0) * cropWidth + ((x - left) / scale | 0);
-        if (kind === 'red' || (notes[cell] && (kind === 'ink' || isBlueInk(data, index * 4) || isAntialiasedInk(data, index * 4)))) mask[index] = 255;
+        const inked = kind === 'ink' || isBlueInk(data, index * 4) || isAntialiasedInk(data, index * 4);
+        if (kind === 'red' || (notes[cell] && inked)) mask[index] = 255;
+        else if (keptCells[cell] && inked) keptLines[index] = 1;
       }
     }
-    // Take in the soft edge of each note so filling it leaves no grey or pink halo.
-    const edge: number[] = [];
-    for (let y = Math.max(1, top); y < Math.min(height - 1, bottom); y += 1) {
-      for (let x = Math.max(1, left); x < Math.min(width - 1, right); x += 1) {
-        const index = y * width + x;
-        if (mask[index] || pixelKind(data, index * 4) === 'ink') continue;
-        if (Math.min(data[index * 4], data[index * 4 + 1], data[index * 4 + 2]) >= 230) continue;
-        if (mask[index - 1] || mask[index + 1] || mask[index - width] || mask[index + width]) edge.push(index);
-      }
-    }
-    for (const index of edge) mask[index] = 255;
+    // Take in the soft edge of each note (anti-aliasing, marker bleed, blur) so filling it leaves
+    // no grey or pink outline: about one pen width out, measured in full-size pixels.
+    const haloRadius = Math.max(HALO_MIN_RADIUS, Math.ceil(markStats.strokeWidth * scale));
+    result = growIntoHalo(data, width, height, mask, keptLines, { left, top, right, bottom }, haloRadius);
   }
   return result;
 }
