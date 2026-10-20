@@ -275,6 +275,22 @@ describe('wider leader candidates', () => {
   });
 });
 
+describe('kept lines reported for erasing', () => {
+  it('reports the drawing line it keeps, and none of the note it selects', () => {
+    const target = canvas(240, 200);
+    stroke(target, 120, 5, 120, 195);
+    stroke(target, 220, 20, 124, 100);
+    stroke(target, 124, 100, 136, 88, { thickness: 3 }); stroke(target, 124, 100, 140, 99, { thickness: 3 });
+    stroke(target, 200, 10, 238, 14); writing(target, 196, 2, 239, 26);
+    const kept = new Uint8Array(240 * 200);
+    const mask = findAnnotationInk(target, 240, 200, undefined, kept);
+    expect(kept[160 * 240 + 120]).toBe(1);
+    expect(kept[60 * 240 + 172]).toBe(0);
+    expect(mask[60 * 240 + 172] || mask[61 * 240 + 172] || mask[59 * 240 + 172]).toBe(255);
+    for (let index = 0; index < kept.length; index += 1) if (kept[index]) expect(mask[index]).toBe(0);
+  });
+});
+
 describe('analysis time on a busy area', () => {
   it('judges a dense field of lines and slashes in a few seconds', () => {
     const target = canvas(1200, 1200);
