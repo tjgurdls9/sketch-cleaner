@@ -6,6 +6,7 @@ export interface Region { left: number; top: number; right: number; bottom: numb
 // A pixel belongs to a mark's soft edge when it stands out from the paper by this much.
 const HALO_DARKER = 10;
 const HALO_TINT = 18;
+const OPAQUE = 128;
 
 const lightness = (data: Uint8ClampedArray, offset: number): number => (data[offset] + data[offset + 1] + data[offset + 2]) / 3;
 
@@ -27,6 +28,8 @@ export function growIntoHalo(data: Uint8ClampedArray, width: number, height: num
     const offset = index * 4;
     const x = index % width;
     const paper = paperAt(x, (index - x) / width);
+    // Nothing grows into a transparent backdrop, nor onto marks sitting on one.
+    if (data[offset + 3] < OPAQUE || paper[3] < OPAQUE) return false;
     const paperLight = (paper[0] + paper[1] + paper[2]) / 3;
     const tint = Math.max(Math.abs(data[offset] - paper[0]), Math.abs(data[offset + 1] - paper[1]), Math.abs(data[offset + 2] - paper[2]));
     return paperLight - lightness(data, offset) > HALO_DARKER || tint > HALO_TINT;

@@ -425,7 +425,7 @@ function selectedEdit(snapshot: Snapshot, candidateAt: (x: number, y: number, ou
 function fillColorAt(snapshot: Snapshot, fill: Fill, exclude?: Uint8Array): (x: number, y: number) => readonly number[] {
   if (fill?.kind === 'paper') {
     const paper = paperColorAt(snapshot.working.data, snapshot.working.width, snapshot.working.height, exclude);
-    return (x, y) => [...paper(x, y), 255];
+    return paper;
   }
   const color = fillColor(snapshot, fill);
   return () => color;
