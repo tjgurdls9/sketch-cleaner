@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pixels, Snapshot } from '../src/shared/types';
 import { createSnapshot, runPixelJob } from '../src/core/engine';
-import { autoCleanDraft } from '../src/core/automatic';
+import { autoCleanDraft, isSheetFrame } from '../src/core/automatic';
 
 const WHITE: [number, number, number, number] = [255, 255, 255, 255];
 const BLACK: [number, number, number, number] = [24, 24, 24, 255];
@@ -262,4 +262,20 @@ describe('automatic cleanup draft', () => {
     expect(draft(snapshot)).toBe(snapshot);
     expect(performance.now() - began).toBeLessThan(20_000);
   }, 30_000); // The budget above is the check; slow CI runners need more than the 5s default.
+});
+
+describe('sheet frame left after splitting off the form', () => {
+  // Bounds measured on a real photo: an 840 x 1190 analysis grid.
+  const grid = { width: 840, height: 1190 };
+  const bounds = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom, count: 1 });
+
+  it('is the scanner bed or board around the sheet when it reaches three or four edges', () => {
+    expect(isSheetFrame(bounds(5, 5, 834, 1184), grid.width, grid.height)).toBe(true);
+    expect(isSheetFrame(bounds(3, 2, 836, 700), grid.width, grid.height)).toBe(true);
+  });
+
+  it('is a figure when it stays inside the sheet or is cut by one or two edges of the photo', () => {
+    expect(isSheetFrame(bounds(87, 387, 316, 745), grid.width, grid.height)).toBe(false);
+    expect(isSheetFrame(bounds(0, 500, 400, 1189), grid.width, grid.height)).toBe(false);
+  });
 });
