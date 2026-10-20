@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pixels, Snapshot } from '../src/shared/types';
 import { createSnapshot, runPixelJob } from '../src/core/engine';
-import { autoCleanDraft, isSheetFrame } from '../src/core/automatic';
+import { autoCleanDraft, isSheetFrame, withoutSheetFrames } from '../src/core/automatic';
 
 const WHITE: [number, number, number, number] = [255, 255, 255, 255];
 const BLACK: [number, number, number, number] = [24, 24, 24, 255];
@@ -272,6 +272,15 @@ describe('sheet frame left after splitting off the form', () => {
   it('is the scanner bed or board around the sheet when it reaches three or four edges', () => {
     expect(isSheetFrame(bounds(5, 5, 834, 1184), grid.width, grid.height)).toBe(true);
     expect(isSheetFrame(bounds(3, 2, 836, 700), grid.width, grid.height)).toBe(true);
+  });
+
+  it('drops a frame from the figures only when figures of their own are left', () => {
+    const frame = { id: 950, bounds: bounds(5, 5, 834, 1184) };
+    const skirt = { id: 1022, bounds: bounds(87, 387, 316, 745) };
+    const frames = new Set([950]);
+    expect(withoutSheetFrames([frame, skirt], frames)).toEqual({ anchors: [skirt], dropped: [950] });
+    // A cut-out garment pasted on a backdrop: the backdrop part holds the garment itself.
+    expect(withoutSheetFrames([frame], frames)).toEqual({ anchors: [frame], dropped: [] });
   });
 
   it('is a figure when it stays inside the sheet or is cut by one or two edges of the photo', () => {
