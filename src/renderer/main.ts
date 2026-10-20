@@ -3,7 +3,7 @@ import {
   createHistory, createSnapshot, historySnapshot, redoHistory, undoHistory, viewToImage,
   commitHistory, eraseStroke, fillSelection, marqueeRect, rectPolygon, selectLasso,
 } from '../core/engine';
-import type { Affine, Brush, Fill, History, PixelJob, Point, Rect, ViewTransform } from '../core/engine';
+import type { Affine, Brush, Fill, History, PixelJob, Point, Rect, SelectionCombine, ViewTransform } from '../core/engine';
 import type {
   Candidate, ExportResult, ImportedImage, Pixels, Project, RecentProject,
   Reply, RequestBundle, RequestInfo, Snapshot,
@@ -101,6 +101,10 @@ let draftKind: 'brush' | 'lasso' | 'crop' | 'marquee' | 'pen' | null = null;
 let gesture: 'draw' | 'lasso' | 'crop' | 'marquee' | 'pan' | 'candidate' | null = null;
 let penHover: Point | null = null;
 let marqueeModifiers = { square: false, fromCenter: false };
+/** Photoshop: Shift or Alt held when a selection starts adds or subtracts. */
+let selectionCombine: SelectionCombine = 'replace';
+/** A key that started an add/subtract only squares or centers the marquee after being pressed again. */
+let marqueeHeld = { shift: false, alt: false };
 let lastGesturePoint: Point | null = null;
 let gestureStart: Point | null = null;
 let gestureViewStart: { x: number; y: number; panX: number; panY: number } | null = null;
@@ -835,26 +839,37 @@ function finishMarquee(): void {
   endDraft();
   if (!start || !end) return;
   const rect = marqueeRect(start, end, marqueeModifiers);
-  // A plain click without a drag deselects, as in Photoshop.
-  if (rect.width < 1 || rect.height < 1) { deselect(); return; }
-  applyNow(snapshot => selectLasso(snapshot, rectPolygon(rect), 'inside'), '사각 선택을 만들지 못했습니다.');
+  // A plain click without a drag deselects; a Shift or Alt click keeps the selection, as in Photoshop.
+  if (rect.width < 1 || rect.height < 1) { if (selectionCombine === 'replace') deselect(); return; }
+  const combine = selectionCombine;
+  applyNow(snapshot => selectLasso(snapshot, rectPolygon(rect), 'inside', combine), '사각 선택을 만들지 못했습니다.');
 }
 
 function finishPen(): void {
   const polygon = draftPoints;
   endDraft();
   if (polygon.length < 3) { renderCanvas(); return; }
-  applyNow(snapshot => selectLasso(snapshot, polygon, 'inside'), '펜 선택을 만들지 못했습니다.');
+  const combine = selectionCombine;
+  applyNow(snapshot => selectLasso(snapshot, polygon, 'inside', combine), '펜 선택을 만들지 못했습니다.');
 }
 
-function addPenPoint(point: Point): void {
+function combineFor(event: MouseEvent): SelectionCombine {
+  return event.shiftKey ? 'add' : event.altKey ? 'subtract' : 'replace';
+}
+
+function trackMarqueeModifiers(event: MouseEvent): void {
+  marqueeHeld = { shift: marqueeHeld.shift && event.shiftKey, alt: marqueeHeld.alt && event.altKey };
+  marqueeModifiers = { square: event.shiftKey && !marqueeHeld.shift, fromCenter: event.altKey && !marqueeHeld.alt };
+}
+
+function addPenPoint(point: Point, event: MouseEvent): void {
   const first = draftPoints[0];
   if (draftKind === 'pen' && first && draftPoints.length >= 3
     && Math.hypot(point.x - first.x, point.y - first.y) * state.view.zoom <= PEN_CLOSE_DISTANCE) {
     finishPen();
     return;
   }
-  if (draftKind !== 'pen') { draftKind = 'pen'; draftPoints = []; }
+  if (draftKind !== 'pen') { draftKind = 'pen'; draftPoints = []; selectionCombine = combineFor(event); }
   draftPoints = [...draftPoints, point];
 }
 
@@ -896,7 +911,8 @@ function finishLasso(): void {
   const polygon = draftPoints;
   endDraft();
   if (polygon.length < 3) { renderCanvas(); return; }
-  applyNow(snapshot => selectLasso(snapshot, polygon, state.lassoMode), '올가미 선택을 만들지 못했습니다.');
+  const combine = selectionCombine;
+  applyNow(snapshot => selectLasso(snapshot, polygon, state.lassoMode, combine), '올가미 선택을 만들지 못했습니다.');
 }
 
 async function finishStroke(snapshot: Snapshot, points: Point[], tool: Tool): Promise<void> {
@@ -933,7 +949,7 @@ function pointerDown(event: PointerEvent): void {
     draftKind = 'crop';
     draftPoints = [imagePoint(screen)];
   } else if (state.panel === 'edit' && state.tool === 'pen') {
-    addPenPoint(imagePoint(screen));
+    addPenPoint(imagePoint(screen), event);
     event.preventDefault();
     renderDraft(overlayCanvas.getContext('2d')!, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
     return;
@@ -941,11 +957,14 @@ function pointerDown(event: PointerEvent): void {
     gesture = 'marquee';
     draftKind = 'marquee';
     draftPoints = [imagePoint(screen)];
-    marqueeModifiers = { square: event.shiftKey, fromCenter: event.altKey };
+    selectionCombine = combineFor(event);
+    marqueeHeld = { shift: event.shiftKey, alt: event.altKey };
+    trackMarqueeModifiers(event);
   } else if (state.panel === 'edit' && state.tool === 'lasso') {
     gesture = 'lasso';
     draftKind = 'lasso';
     draftPoints = [imagePoint(screen)];
+    selectionCombine = combineFor(event);
   } else if (state.panel === 'edit' && BRUSH_TOOLS.includes(state.tool)) {
     gesture = 'draw';
     draftKind = 'brush';
@@ -987,7 +1006,7 @@ function pointerMove(event: PointerEvent): void {
     renderDraft(overlayCanvas.getContext('2d')!, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
     return;
   }
-  if (gesture === 'marquee') marqueeModifiers = { square: event.shiftKey, fromCenter: event.altKey };
+  if (gesture === 'marquee') trackMarqueeModifiers(event);
   if ((gesture === 'draw' || gesture === 'lasso' || gesture === 'crop' || gesture === 'marquee') && draftPoints.length) {
     const point = imagePoint(screen);
     const previous = draftPoints[draftPoints.length - 1];
@@ -1314,13 +1333,13 @@ function setTool(tool: Tool): void {
   $('#lassoControls').toggleAttribute('hidden', tool !== 'lasso');
   const hints: Record<Tool, string> = {
     erase: '드래그하는 곳을 바로 지웁니다. 파랑 보호 영역은 지워지지 않습니다. [ ]로 크기 조절.',
-    marquee: '드래그해 사각형으로 선택하고 Delete로 지우세요. Shift 정사각형, Alt 중심 기준.',
-    pen: '점을 찍어 직선으로 두르고 첫 점이나 Enter로 닫으세요. Backspace 한 점 취소, Esc 취소.',
+    marquee: '드래그해 사각형으로 선택하고 Delete로 지우세요. Shift를 누르고 시작하면 더하기, Alt는 빼기. 드래그 중 Shift 정사각형, Alt 중심 기준.',
+    pen: '점을 찍어 직선으로 두르고 첫 점이나 Enter로 닫으세요. 첫 점을 Shift로 찍으면 더하기, Alt는 빼기. Backspace 한 점 취소, Esc 취소.',
     delete: '바꿔도 되는 영역을 드래그해 표시하세요.',
     protect: '남길 선과 부분을 드래그해 보호하세요.',
     unselect: '사진은 지우지 않고 표시만 지웁니다.',
     restore: '현재 작업 기준 픽셀을 다시 가져옵니다.',
-    lasso: '사진 안에서 자유롭게 둘러 선택하고 Delete로 지우세요.',
+    lasso: '사진 안에서 자유롭게 둘러 선택하고 Delete로 지우세요. Shift를 누르고 시작하면 더하기, Alt는 빼기.',
     pan: '드래그해 화면을 옮기세요. 스페이스바를 누른 채 이동할 수도 있습니다.',
     crop: '사진 안에서 자를 사각형을 드래그하세요.',
     sample: '사진을 눌러 채울 배경색을 찍으세요.',
@@ -1357,7 +1376,7 @@ function autoCleanDescription(): string {
     idle: { title: '원본 미리보기입니다', detail: '자동 정리는 글씨 범위를 참고해 주변의 분리된 표시를 정리합니다. 선과 겹쳐 판단하기 어려운 곳은 직접 수정하세요.' },
     running: { title: '자동 정리 중입니다', detail: '먼저 로컬 모델이 글씨 범위를 살펴본 뒤 정리합니다. 취소해도 사진은 유지됩니다.' },
     complete: { title: '자동 정리를 적용했습니다', detail: '결과 선을 살펴보고 필요한 곳은 직접 수정하세요.' },
-    review: { title: '도해 안의 지울 후보를 빨간색으로 골라 두었습니다', detail: '글씨·화살표·가위표·색 표시 후보입니다. 디자인인 곳은 표시 지우기로 빼고 Delete로 지우세요.' },
+    review: { title: '도해 안의 지울 후보를 빨간색으로 골라 두었습니다', detail: '글씨·화살표·가위표·색 표시 후보입니다. 디자인인 곳은 표시 지우기나 Alt를 누른 선택으로 빼고 Delete로 지우세요.' },
     unchanged: { title: '', detail: '자동으로 지울 범위를 확신하기 어려워 원본을 유지했습니다. 직접 수정할 수 있습니다.' },
     cancelled: { title: '자동 정리를 취소했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
     failed: { title: '자동 정리를 마치지 못했습니다', detail: '사진은 유지되어 직접 수정할 수 있습니다.' },
@@ -1967,16 +1986,16 @@ function bindEvents(): void {
   document.addEventListener('keydown', keyDown);
   document.addEventListener('keyup', event => {
     if (event.code === 'Space') spaceDown = false;
+    if (holdsSelectionAlt(event)) event.preventDefault();
   });
   document.addEventListener('click', event => {
     if (!$('#projectMenu').contains(event.target as Node) && event.target !== $('#moreMenuButton')) $('#projectMenu').setAttribute('hidden', '');
   });
+  // The main process asks the person; confirm() is blocked while unloading.
   window.addEventListener('beforeunload', event => {
     if (!state.dirty && !pendingSave && !state.saveFailed && !worker) return;
-    if (!window.confirm('저장되지 않은 변경사항이 있습니다. 마지막 정상 저장본을 보존하고 앱을 닫을까요?')) {
-      event.preventDefault();
-      event.returnValue = '';
-    }
+    event.preventDefault();
+    event.returnValue = '';
   });
   const observer = new ResizeObserver(() => {
     window.cancelAnimationFrame(resizeFrame);
@@ -1987,7 +2006,10 @@ function bindEvents(): void {
 
 function undo(): void {
   if (!state.history) return;
-  state.history = undoHistory(state.history);
+  const next = undoHistory(state.history);
+  // Nothing to undo: leave the work as saved.
+  if (next === state.history) return;
+  state.history = next;
   state.snapshot = historySnapshot(state.history);
   state.adjustmentPreview = null;
   state.dirty = true;
@@ -2002,7 +2024,10 @@ function undo(): void {
 
 function redo(): void {
   if (!state.history) return;
-  state.history = redoHistory(state.history);
+  const next = redoHistory(state.history);
+  // Nothing to redo: leave the work as saved.
+  if (next === state.history) return;
+  state.history = next;
   state.snapshot = historySnapshot(state.history);
   state.adjustmentPreview = null;
   state.dirty = true;
@@ -2022,7 +2047,13 @@ function editingField(target: EventTarget | null): boolean {
   return (target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type)) || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
 }
 
+/** Windows hands an unhandled Alt to the menu bar, which would steal the next Alt-drag. */
+function holdsSelectionAlt(event: KeyboardEvent): boolean {
+  return event.key === 'Alt' && state.panel === 'edit' && SELECTION_TOOLS.includes(state.tool) && !editingField(event.target);
+}
+
 function keyDown(event: KeyboardEvent): void {
+  if (holdsSelectionAlt(event)) { event.preventDefault(); return; }
   if (event.code === 'Space' && !editingField(event.target)) {
     spaceDown = true;
     event.preventDefault();

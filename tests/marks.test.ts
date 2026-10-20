@@ -195,6 +195,86 @@ describe('note candidates inside a figure', () => {
   });
 });
 
+describe('wider leader candidates', () => {
+  it('selects a leader cut by the edge of the area where it meets a drawing line in a T', () => {
+    const target = canvas(240, 240);
+    stroke(target, 120, 5, 120, 235);
+    stroke(target, 0, 40, 117, 110, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 60, 76)).toBe(true);
+    expect(selected(mask, target, 120, 30)).toBe(false);
+    expect(selected(mask, target, 120, 200)).toBe(false);
+  });
+
+  it('selects a leader from the edge that crosses the outline and stops at the stitching inside', () => {
+    const target = canvas(240, 240);
+    stroke(target, 100, 5, 100, 235);
+    dashes(target, 120, 5, 120, 235);
+    stroke(target, 0, 60, 118, 110, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 50, 81)).toBe(true);
+    expect(selected(mask, target, 100, 30)).toBe(false);
+    expect(selected(mask, target, 100, 200)).toBe(false);
+  });
+
+  it('keeps a straight drawing line that crosses another line and runs on far past it', () => {
+    const target = canvas(240, 240);
+    stroke(target, 100, 5, 100, 235);
+    stroke(target, 0, 120, 239, 120);
+    stroke(target, 200, 5, 200, 235);
+    const mask = run(target);
+    expect(selected(mask, target, 50, 120)).toBe(false);
+    expect(selected(mask, target, 150, 120)).toBe(false);
+  });
+
+  it('keeps a drawing line that runs from the edge of the area to a corner', () => {
+    const target = canvas(240, 240);
+    stroke(target, 0, 100, 150, 100);
+    stroke(target, 150, 100, 150, 235);
+    stroke(target, 40, 160, 220, 160);
+    const mask = run(target);
+    expect(selected(mask, target, 75, 100)).toBe(false);
+    expect(selected(mask, target, 150, 200)).toBe(false);
+  });
+
+  it('selects a short leader from the edge that crosses the outline like a stitch-end slash', () => {
+    const target = canvas(240, 240);
+    stroke(target, 200, 5, 200, 235);
+    dashes(target, 185, 5, 185, 235);
+    stroke(target, 239, 100, 178, 110, { thickness: 3 });
+    const mask = run(target);
+    expect(selected(mask, target, 222, 103)).toBe(true);
+    expect(selected(mask, target, 200, 40)).toBe(false);
+    expect(selected(mask, target, 200, 200)).toBe(false);
+  });
+
+  it('selects a leader whose free end lines up with a stroke of the note like the next dash', () => {
+    const target = canvas(240, 200);
+    stroke(target, 60, 5, 60, 195);
+    stroke(target, 200, 40, 63, 120, { thickness: 3 });
+    stroke(target, 210, 34, 226, 25, { thickness: 3 }); // first stroke of the note, in line with the leader
+    stroke(target, 214, 14, 232, 14, { thickness: 3 });
+    writing(target, 204, 6, 239, 40);
+    const mask = run(target);
+    expect(selected(mask, target, 130, 80)).toBe(true);
+    expect(selected(mask, target, 60, 40)).toBe(false);
+    expect(selected(mask, target, 60, 170)).toBe(false);
+  });
+  it('selects a leader broken by a hairline gap, both pieces, though they line up like dashes', () => {
+    const target = canvas(240, 200);
+    stroke(target, 60, 5, 60, 195);
+    stroke(target, 63, 120, 120, 86, { thickness: 3 });
+    stroke(target, 124, 84, 180, 50, { thickness: 3 }); // the pen skipped for a moment
+    stroke(target, 196, 30, 230, 30, { thickness: 3 });
+    writing(target, 184, 6, 239, 48);
+    const mask = run(target);
+    expect(selected(mask, target, 150, 68)).toBe(true);
+    expect(selected(mask, target, 90, 104)).toBe(true);
+    expect(selected(mask, target, 60, 40)).toBe(false);
+    expect(selected(mask, target, 60, 170)).toBe(false);
+  });
+});
+
 describe('form table split', () => {
   it('takes long ruled lines out of a table component and leaves the drawing that touched it', () => {
     const width = 300;

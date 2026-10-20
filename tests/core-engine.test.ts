@@ -367,6 +367,20 @@ describe('instant photoshop-style edits', () => {
     expect(at(filled.working, 1, 3)).toEqual([0, 0, 0, 255]);
   });
 
+  it('adds to and subtracts from an existing selection without touching the rest', () => {
+    const start = snapshot(6, 1);
+    start.deleteMask.set([255, 128, 0, 0, 255, 255]);
+    const added = selectLasso(start, rectPolygon({ x: 2, y: 0, width: 1, height: 1 }), 'inside', 'add');
+    expect([...added.deleteMask]).toEqual([255, 128, 255, 0, 255, 255]);
+    const subtracted = selectLasso(added, rectPolygon({ x: 4, y: 0, width: 2, height: 1 }), 'inside', 'subtract');
+    expect([...subtracted.deleteMask]).toEqual([255, 128, 255, 0, 0, 0]);
+    const outsideAdded = selectLasso(start, rectPolygon({ x: 0, y: 0, width: 3, height: 1 }), 'outside', 'add');
+    expect([...outsideAdded.deleteMask]).toEqual([255, 128, 0, 255, 255, 255]);
+    expect(selectLasso(start, rectPolygon({ x: 2, y: 0, width: 2, height: 1 }), 'inside', 'subtract')).toBe(start);
+    expect([...selectLasso(start, rectPolygon({ x: 2, y: 0, width: 1, height: 1 }), 'inside', 'replace').deleteMask]).toEqual([0, 0, 255, 0, 0, 0]);
+    expect(() => selectLasso(start, rectPolygon({ x: 0, y: 0, width: 1, height: 1 }), 'inside', 'merge' as never)).toThrow(TypeError);
+  });
+
   it('runs an erase job through the worker dispatcher', () => {
     const value = runPixelJob({ type: 'erase', snapshot: snapshot(3, 1), points: [{ x: 1.5, y: 0.5 }], brush: { radius: 0.5, strength: 1, hardness: 1 }, fill: { kind: 'white' } });
     if (!('working' in value)) throw new Error('Expected a snapshot');
