@@ -165,6 +165,54 @@ function componentIsGarment(bounds: Bounds, analysisWidth: number, analysisHeigh
     && density >= 0.012 && density <= 0.5;
 }
 
+/** Share of the analysis grid within which a part counts as touching that edge of the photo. */
+const FRAME_EDGE_SHARE = 0.02;
+const FRAME_MIN_EDGES = 3;
+// A frame leaves the middle of its bounds to the sheet: measured 0% on a scanner bed, against 7%
+// for a backdrop with garments pasted on it and 24% for a tightly cropped drawing.
+const FRAME_HOLLOW_SHARE = 0.01;
+
+/**
+ * The scanner bed or board around a photographed sheet reaches the photo edges on three or four
+ * sides; a garment figure stays inside the sheet, or is cut by at most two edges of the photo.
+ */
+export function isSheetFrame(bounds: Bounds, gridWidth: number, gridHeight: number): boolean {
+  const marginX = Math.max(1, Math.ceil(gridWidth * FRAME_EDGE_SHARE));
+  const marginY = Math.max(1, Math.ceil(gridHeight * FRAME_EDGE_SHARE));
+  const edges = [
+    bounds.left < marginX,
+    bounds.top < marginY,
+    bounds.right >= gridWidth - marginX,
+    bounds.bottom >= gridHeight - marginY,
+  ].filter(Boolean).length;
+  return edges >= FRAME_MIN_EDGES;
+}
+
+/** True when the middle half of the bounds holds almost none of this part. */
+export function isHollow(labels: Int32Array, id: number, bounds: Bounds, gridWidth: number): boolean {
+  const width = bounds.right - bounds.left + 1;
+  const height = bounds.bottom - bounds.top + 1;
+  const left = bounds.left + Math.floor(width / 4);
+  const right = bounds.right - Math.floor(width / 4);
+  const top = bounds.top + Math.floor(height / 4);
+  const bottom = bounds.bottom - Math.floor(height / 4);
+  let inside = 0;
+  for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) if (labels[y * gridWidth + x] === id) inside += 1;
+  return inside <= (right - left + 1) * (bottom - top + 1) * FRAME_HOLLOW_SHARE;
+}
+
+/**
+ * Leaves frame parts out of the figures when figures of their own remain. A cut-out garment
+ * pasted on a backdrop is one part with the backdrop, so a lone frame part stays a figure.
+ */
+export function withoutSheetFrames<T extends { id: number }>(anchors: readonly T[], frames: ReadonlySet<number>): { anchors: T[]; dropped: number[] } {
+  if (!anchors.some(anchor => !frames.has(anchor.id))) return { anchors: [...anchors], dropped: [] };
+  return {
+    anchors: anchors.filter(anchor => !frames.has(anchor.id)),
+    dropped: anchors.filter(anchor => frames.has(anchor.id)).map(anchor => anchor.id),
+  };
+}
+
 function labelComponentFlags(components: readonly Bounds[], gridPixels: number, minimum: number, maximumRatio: number): Uint8Array {
   const flags = new Uint8Array(components.length + 1);
   for (let index = 0; index < components.length; index += 1) {
@@ -541,6 +589,7 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
   const anchors: { id: number; bounds: Bounds }[] = [];
   const gridFlags = new Uint8Array(components.length + 1);
   const componentSmall = new Uint8Array(components.length + 1);
+  const frames = new Set<number>();
   let largestAnchor = 0;
 
   for (let index = 0; index < components.length; index += 1) {
@@ -558,9 +607,15 @@ export function autoCleanDraft(snapshot: Snapshot, progress?: Progress, textMask
     }
     if (componentIsGarment(bounds, gridWidth, gridHeight, gridPixels)) {
       anchors.push({ id, bounds });
-      largestAnchor = Math.max(largestAnchor, bounds.count);
+      // Splitting the printed rules off the form can leave the frame around the sheet as a part.
+      if (index >= originalCount && isSheetFrame(bounds, gridWidth, gridHeight) && isHollow(labels, id, bounds, gridWidth)) frames.add(id);
     }
   }
+  // That frame is background, as it was while joined to the form, unless it holds the garment.
+  const unframed = withoutSheetFrames(anchors, frames);
+  for (const id of unframed.dropped) gridFlags[id] = 1;
+  anchors.splice(0, anchors.length, ...unframed.anchors);
+  for (const anchor of anchors) largestAnchor = Math.max(largestAnchor, anchor.bounds.count);
 
   if (!anchors.length) {
     progress?.(total, total);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pixels, Snapshot } from '../src/shared/types';
 import { createSnapshot, runPixelJob } from '../src/core/engine';
-import { autoCleanDraft } from '../src/core/automatic';
+import { autoCleanDraft, isHollow, isSheetFrame, withoutSheetFrames } from '../src/core/automatic';
 
 const WHITE: [number, number, number, number] = [255, 255, 255, 255];
 const BLACK: [number, number, number, number] = [24, 24, 24, 255];
@@ -262,4 +262,46 @@ describe('automatic cleanup draft', () => {
     expect(draft(snapshot)).toBe(snapshot);
     expect(performance.now() - began).toBeLessThan(20_000);
   }, 30_000); // The budget above is the check; slow CI runners need more than the 5s default.
+});
+
+describe('sheet frame left after splitting off the form', () => {
+  // Bounds measured on a real photo: an 840 x 1190 analysis grid.
+  const grid = { width: 840, height: 1190 };
+  const bounds = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom, count: 1 });
+
+  it('is the scanner bed or board around the sheet when it reaches three or four edges', () => {
+    expect(isSheetFrame(bounds(5, 5, 834, 1184), grid.width, grid.height)).toBe(true);
+    expect(isSheetFrame(bounds(3, 2, 836, 700), grid.width, grid.height)).toBe(true);
+  });
+
+  it('is hollow when its middle is empty, as a frame around a sheet is', () => {
+    const [width, height] = [100, 120];
+    const ring = new Int32Array(width * height);
+    const filled = new Int32Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        if (x < 10 || y < 10 || x >= 90 || y >= 110) ring[index] = 7;
+        // A tightly cropped photo: the drawing runs right through the middle.
+        if (x < 10 || y >= 110 || (x >= 40 && x < 46) || (y >= 50 && y < 54)) filled[index] = 7;
+      }
+    }
+    const whole = bounds(0, 0, width - 1, height - 1);
+    expect(isHollow(ring, 7, whole, width)).toBe(true);
+    expect(isHollow(filled, 7, whole, width)).toBe(false);
+  });
+
+  it('drops a frame from the figures only when figures of their own are left', () => {
+    const frame = { id: 950, bounds: bounds(5, 5, 834, 1184) };
+    const skirt = { id: 1022, bounds: bounds(87, 387, 316, 745) };
+    const frames = new Set([950]);
+    expect(withoutSheetFrames([frame, skirt], frames)).toEqual({ anchors: [skirt], dropped: [950] });
+    // A cut-out garment pasted on a backdrop: the backdrop part holds the garment itself.
+    expect(withoutSheetFrames([frame], frames)).toEqual({ anchors: [frame], dropped: [] });
+  });
+
+  it('is a figure when it stays inside the sheet or is cut by one or two edges of the photo', () => {
+    expect(isSheetFrame(bounds(87, 387, 316, 745), grid.width, grid.height)).toBe(false);
+    expect(isSheetFrame(bounds(0, 500, 400, 1189), grid.width, grid.height)).toBe(false);
+  });
 });
