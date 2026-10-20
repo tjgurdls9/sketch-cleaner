@@ -6,6 +6,8 @@ export interface Rect { x: number; y: number; width: number; height: number }
 export interface Brush { radius: number; strength: number; hardness: number }
 export type MaskTool = 'delete' | 'protect' | 'unselect';
 export type LassoMode = 'inside' | 'outside';
+/** How a new selection meets the current one: Photoshop's new, Shift-add and Alt-subtract. */
+export type SelectionCombine = 'replace' | 'add' | 'subtract';
 export interface Affine { a: number; b: number; c: number; d: number; e: number; f: number }
 export interface ViewTransform { zoom: number; panX: number; panY: number }
 export type Fill = { kind: 'white' } | { kind: 'sample'; point: Point };
@@ -18,7 +20,7 @@ export type PixelJob =
   | { type: 'stroke'; snapshot: Snapshot; points: Point[]; brush: Brush; tool: MaskTool }
   | { type: 'restore'; snapshot: Snapshot; points: Point[]; brush: Brush }
   | { type: 'erase'; snapshot: Snapshot; points: Point[]; brush: Brush; fill: Fill }
-  | { type: 'lasso'; snapshot: Snapshot; polygon: Point[]; mode: LassoMode }
+  | { type: 'lasso'; snapshot: Snapshot; polygon: Point[]; mode: LassoMode; combine?: SelectionCombine }
   | { type: 'rotate'; snapshot: Snapshot; degrees: number }
   | { type: 'crop'; snapshot: Snapshot; rect: Rect }
   | { type: 'fill'; snapshot: Snapshot; fill: Fill }
@@ -258,10 +260,11 @@ export function restoreStroke(snapshot: Snapshot, points: readonly Point[], brus
   return changed ? withVersion(snapshot, { working: { ...snapshot.working, data: working } }) : snapshot;
 }
 
-export function selectLasso(snapshot: Snapshot, polygon: readonly Point[], mode: LassoMode, progress?: PixelProgress): Snapshot {
+export function selectLasso(snapshot: Snapshot, polygon: readonly Point[], mode: LassoMode, combine: SelectionCombine = 'replace', progress?: PixelProgress): Snapshot {
   validateSnapshot(snapshot);
   validatePoints(polygon, 3);
   if (mode !== 'inside' && mode !== 'outside') throw new TypeError('Invalid lasso mode');
+  if (combine !== 'replace' && combine !== 'add' && combine !== 'subtract') throw new TypeError('Invalid selection combine');
   const { width, height } = snapshot.base;
   const deleteMask = new Uint8Array(width * height);
   const intersections: number[] = [];
@@ -284,8 +287,11 @@ export function selectLasso(snapshot: Snapshot, polygon: readonly Point[], mode:
     }
     for (let x = 0; x < width; x++) {
       const index = rowStart + x;
-      const value = deleteMask[index];
-      if (value !== snapshot.deleteMask[index]) changed = true;
+      const current = snapshot.deleteMask[index];
+      const region = deleteMask[index];
+      const value = combine === 'add' ? Math.max(current, region) : combine === 'subtract' ? (region ? 0 : current) : region;
+      deleteMask[index] = value;
+      if (value !== current) changed = true;
     }
     progressRows(progress, y, height);
   }
@@ -670,7 +676,7 @@ export function runPixelJob(job: PixelJob, progress?: PixelProgress): Pixels | S
     case 'stroke': return paintStroke(job.snapshot, job.points, job.brush, job.tool, progress);
     case 'restore': return restoreStroke(job.snapshot, job.points, job.brush, progress);
     case 'erase': return eraseStroke(job.snapshot, job.points, job.brush, job.fill, progress);
-    case 'lasso': return selectLasso(job.snapshot, job.polygon, job.mode, progress);
+    case 'lasso': return selectLasso(job.snapshot, job.polygon, job.mode, job.combine, progress);
     case 'rotate': return rotateBasis(job.snapshot, job.degrees, progress);
     case 'crop': return cropBasis(job.snapshot, job.rect, progress);
     case 'fill': return fillSelection(job.snapshot, job.fill, progress);
