@@ -179,6 +179,16 @@ describe('note candidates inside a figure', () => {
     expect(selected(mask, target, 130, 150)).toBe(true);
   });
 
+  it('selects wiggly handwriting inside a text area instead of keeping it as a zipper line', () => {
+    const target = canvas(260, 200);
+    stroke(target, 20, 10, 20, 190);
+    for (let x = 60; x < 200; x += 1) stroke(target, x, 100 + 6 * Math.sin(x / 5), x + 1, 100 + 6 * Math.sin((x + 1) / 5), { thickness: 3 });
+    writing(target, 50, 85, 210, 115);
+    const mask = run(target);
+    expect(selected(mask, target, 130, 100, 7)).toBe(true);
+    expect(selected(mask, target, 20, 100)).toBe(false);
+  });
+
   it('returns an empty mask for blank paper', () => {
     const target = canvas(40, 40);
     expect(run(target).some(Boolean)).toBe(false);
