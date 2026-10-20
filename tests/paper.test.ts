@@ -17,7 +17,7 @@ describe('paper colour around a spot', () => {
     const data = sheet(width, height);
     const exclude = new Uint8Array(width * height);
     for (let y = 10; y < 30; y += 1) for (let x = 10; x < 50; x += 1) { paint(data, width, x, y, [30, 30, 30]); exclude[y * width + x] = 255; }
-    expect(paperColorAt(data, width, height, exclude)(30, 20)).toEqual(CREAM);
+    expect(paperColorAt(data, width, height, exclude)(30, 20)).toEqual([...CREAM, 255]);
   });
 
   it('is measured locally: a grey backdrop beside a white sheet keeps its own colour', () => {
@@ -25,8 +25,22 @@ describe('paper colour around a spot', () => {
     const data = sheet(width, height, [255, 255, 255]);
     for (let y = 0; y < height; y += 1) for (let x = 100; x < width; x += 1) paint(data, width, x, y, [110, 110, 112]);
     const at = paperColorAt(data, width, height);
-    expect(at(20, 30)).toEqual([255, 255, 255]);
-    expect(at(180, 30)).toEqual([110, 110, 112]);
+    expect(at(20, 30)).toEqual([255, 255, 255, 255]);
+    expect(at(180, 30)).toEqual([110, 110, 112, 255]);
+  });
+});
+
+describe('transparent backdrop', () => {
+  it('is transparent where the photo is: erasing a mark there restores transparency, not black', () => {
+    const [width, height] = [120, 60];
+    const data = sheet(width, height);
+    for (let y = 0; y < height; y += 1) for (let x = 60; x < width; x += 1) data.set([0, 0, 0, 0], (y * width + x) * 4);
+    expect(paperColorAt(data, width, height)(100, 30)).toEqual([0, 0, 0, 0]);
+    expect(paperColorAt(data, width, height)(10, 30)).toEqual([...CREAM, 255]);
+    const snapshot = createSnapshot({ width, height, data }, 'cutout');
+    for (let x = 80; x < 110; x += 1) { snapshot.working.data.set([40, 40, 40, 255], (30 * width + x) * 4); snapshot.deleteMask[30 * width + x] = 255; }
+    const filled = fillSelection(snapshot, { kind: 'paper' });
+    expect([...filled.working.data.slice((30 * width + 95) * 4, (30 * width + 95) * 4 + 4)]).toEqual([0, 0, 0, 0]);
   });
 });
 
