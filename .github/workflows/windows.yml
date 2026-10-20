@@ -25,7 +25,7 @@ jobs:
       - run: npm run make -- --platform win32 --arch x64
       - name: Check packaged file scope
         run: |
-          node --input-type=module -e "import { listPackage } from '@electron/asar'; import assert from 'node:assert/strict'; const files = listPackage('out/Sketch Cleaner-win32-x64/resources/app.asar'); assert(files.includes('/dist/main/main.js')); assert(!files.some(file => /^\/(?:\.scratch|projects|src|tests|e2e|artifacts|coverage|test-results|playwright-report)(?:\/|$)/.test(file) || /^\/\.env(?:\.|$)/.test(file)), 'Private or development files in app.asar');"
+          node --input-type=module -e "import { listPackage } from '@electron/asar'; import assert from 'node:assert/strict'; const files = listPackage('out/Sketch Cleaner-win32-x64/resources/app.asar').map(file => file.replaceAll('\\', '/')); assert(files.includes('/dist/main/main.js')); assert(!files.some(file => /^\/(?:\.scratch|projects|src|tests|e2e|artifacts|coverage|test-results|playwright-report)(?:\/|$)/.test(file) || /^\/\.env(?:\.|$)/.test(file)), 'Private or development files in app.asar');"
       - name: Check packaged native image libraries
         shell: pwsh
         run: |
