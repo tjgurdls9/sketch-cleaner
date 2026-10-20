@@ -260,15 +260,16 @@ describe('wider leader candidates', () => {
     expect(selected(mask, target, 60, 40)).toBe(false);
     expect(selected(mask, target, 60, 170)).toBe(false);
   });
-  it('selects a leader that ends by strokes of the note just outside the detected writing', () => {
+  it('selects a leader broken by a hairline gap, both pieces, though they line up like dashes', () => {
     const target = canvas(240, 200);
     stroke(target, 60, 5, 60, 195);
-    stroke(target, 63, 120, 180, 50, { thickness: 3 });
-    stroke(target, 186, 46, 210, 32, { thickness: 3 }); // arrowhead stroke reaching into the note
-    stroke(target, 214, 14, 232, 14, { thickness: 3 });
-    writing(target, 198, 6, 239, 40);
+    stroke(target, 63, 120, 120, 86, { thickness: 3 });
+    stroke(target, 124, 84, 180, 50, { thickness: 3 }); // the pen skipped for a moment
+    stroke(target, 196, 30, 230, 30, { thickness: 3 });
+    writing(target, 184, 6, 239, 48);
     const mask = run(target);
-    expect(selected(mask, target, 120, 86)).toBe(true);
+    expect(selected(mask, target, 150, 68)).toBe(true);
+    expect(selected(mask, target, 90, 104)).toBe(true);
     expect(selected(mask, target, 60, 40)).toBe(false);
     expect(selected(mask, target, 60, 170)).toBe(false);
   });
