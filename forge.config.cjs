@@ -19,7 +19,7 @@ module.exports = {
     executableName: 'SketchCleaner',
     appBundleId: 'com.sketchcleaner.desktop',
     appCopyright: 'Sketch Cleaner',
-    ignore: [/^\/(src|tests|plans|docs|scripts|models|artifacts|\.github|coverage|test-results)(\/|$)/, /^\/dist\/models(\/|$)/, /^\/:memory:\.ses$/, /\.map$/],
+    ignore: [/^\/(src|tests|e2e|plans|docs|scripts|models|artifacts|projects|\.scratch|\.github|coverage|test-results|playwright-report)(\/|$)/, /^\/\.env(?:\.|$)/, /^\/dist\/models(\/|$)/, /^\/:memory:\.ses$/, /\.map$/],
   },
   makers: [{ name: '@electron-forge/maker-squirrel', platforms: ['win32'], config: {
     name: 'SketchCleanerDesktop', setupExe: `SketchCleaner-${require('./package.json').version}-Setup.exe`,

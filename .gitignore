@@ -12,4 +12,5 @@ playwright-report/
 !.env.example
 projects/
 artifacts/
+.scratch/
 *.sketchcleaner
