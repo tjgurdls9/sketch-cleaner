@@ -34,4 +34,4 @@ it('runs the production CJS AI worker and cancels a separate native job without 
     service.dispose(); cancelledService.dispose();
     await rm(folder, { recursive: true, force: true });
   }
-}, 30_000);
+}, 60_000); // A functional check, not a timing one: the Windows coverage run took 32.7s once.
