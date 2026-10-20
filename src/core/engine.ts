@@ -260,15 +260,34 @@ export function restoreStroke(snapshot: Snapshot, points: readonly Point[], brus
   return changed ? withVersion(snapshot, { working: { ...snapshot.working, data: working } }) : snapshot;
 }
 
+function validateCombine(combine: SelectionCombine): void {
+  if (combine !== 'replace' && combine !== 'add' && combine !== 'subtract') throw new TypeError('Invalid selection combine');
+}
+
+/** Meets the current selection with a 0/255 region: new (replace), Shift-add or Alt-subtract. */
+export function applySelection(snapshot: Snapshot, region: Uint8Array, combine: SelectionCombine = 'replace'): Snapshot {
+  validateSnapshot(snapshot);
+  validateCombine(combine);
+  if (region.length !== snapshot.deleteMask.length) throw new RangeError('Invalid selection region');
+  const deleteMask = new Uint8Array(region.length);
+  let changed = false;
+  for (let index = 0; index < region.length; index++) {
+    const current = snapshot.deleteMask[index];
+    const value = combine === 'add' ? Math.max(current, region[index]) : combine === 'subtract' ? (region[index] ? 0 : current) : region[index];
+    deleteMask[index] = value;
+    if (value !== current) changed = true;
+  }
+  return changed ? withVersion(snapshot, { deleteMask }) : snapshot;
+}
+
 export function selectLasso(snapshot: Snapshot, polygon: readonly Point[], mode: LassoMode, combine: SelectionCombine = 'replace', progress?: PixelProgress): Snapshot {
   validateSnapshot(snapshot);
   validatePoints(polygon, 3);
   if (mode !== 'inside' && mode !== 'outside') throw new TypeError('Invalid lasso mode');
-  if (combine !== 'replace' && combine !== 'add' && combine !== 'subtract') throw new TypeError('Invalid selection combine');
+  validateCombine(combine);
   const { width, height } = snapshot.base;
-  const deleteMask = new Uint8Array(width * height);
+  const region = new Uint8Array(width * height);
   const intersections: number[] = [];
-  let changed = false;
   for (let y = 0; y < height; y++) {
     const scanY = y + 0.5;
     intersections.length = 0;
@@ -279,23 +298,15 @@ export function selectLasso(snapshot: Snapshot, polygon: readonly Point[], mode:
     }
     intersections.sort((a, b) => a - b);
     const rowStart = y * width;
-    if (mode === 'outside') deleteMask.fill(255, rowStart, rowStart + width);
+    if (mode === 'outside') region.fill(255, rowStart, rowStart + width);
     for (let i = 0; i + 1 < intersections.length; i += 2) {
       const left = Math.max(0, Math.ceil(intersections[i] - 0.5));
       const right = Math.min(width, Math.ceil(intersections[i + 1] - 0.5));
-      if (right > left) deleteMask.fill(mode === 'inside' ? 255 : 0, rowStart + left, rowStart + right);
-    }
-    for (let x = 0; x < width; x++) {
-      const index = rowStart + x;
-      const current = snapshot.deleteMask[index];
-      const region = deleteMask[index];
-      const value = combine === 'add' ? Math.max(current, region) : combine === 'subtract' ? (region ? 0 : current) : region;
-      deleteMask[index] = value;
-      if (value !== current) changed = true;
+      if (right > left) region.fill(mode === 'inside' ? 255 : 0, rowStart + left, rowStart + right);
     }
     progressRows(progress, y, height);
   }
-  return changed ? withVersion(snapshot, { deleteMask }) : snapshot;
+  return applySelection(snapshot, region, combine);
 }
 
 function effectiveMask(snapshot: Snapshot, index: number): number {
