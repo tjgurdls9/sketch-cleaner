@@ -148,6 +148,12 @@ it('edits instantly with eraser, marquee and pen tools and their shortcuts', asy
   // Shift-drag adds and Alt-drag subtracts, as in Photoshop. A key held from the start
   // combines selections; it does not also square or center the marquee.
   key('m');
+  // Alt alone must stay in the page; Windows would otherwise focus the menu bar.
+  for (const type of ['keydown', 'keyup']) {
+    const alt = new KeyboardEvent(type, { key: 'Alt', altKey: type === 'keydown', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(alt);
+    expect(alt.defaultPrevented).toBe(true);
+  }
   drag([13, 10], [17, 13]);
   drag([19, 10], [23, 12], { shiftKey: true });
   drag([15, 10], [20, 14], { altKey: true });
