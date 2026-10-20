@@ -275,6 +275,23 @@ describe('wider leader candidates', () => {
   });
 });
 
+describe('analysis time on a busy area', () => {
+  it('judges a dense field of lines and slashes in a few seconds', () => {
+    const target = canvas(1200, 1200);
+    for (let x = 40; x < 1160; x += 40) {
+      stroke(target, x, 10, x, 1190);
+      for (let y = 40; y < 1160; y += 30) {
+        stroke(target, x - 12, y + 6, x + 12, y - 6, { thickness: 3 });
+        stroke(target, x + 14, y - 8, x + 18, y + 2, { thickness: 3 });
+      }
+    }
+    const began = performance.now();
+    run(target);
+    // Was 26s: every slash checked every piece of the drawing before checking it was nearby.
+    expect(performance.now() - began).toBeLessThan(4_000);
+  }, 60_000);
+});
+
 describe('form table split', () => {
   it('takes long ruled lines out of a table component and leaves the drawing that touched it', () => {
     const width = 300;
