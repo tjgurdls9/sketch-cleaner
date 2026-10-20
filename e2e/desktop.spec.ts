@@ -768,3 +768,72 @@ test('opening the next photo after saving one leaves only the new photo and keep
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('line select (W) picks one line with a click; Shift adds, Alt takes away, Delete erases only it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sketch-line-'));
+  const sourcePath = path.join(root, 'sheet.png');
+  const [width, height] = [600, 400];
+  const paper = [248, 246, 238];
+  const sheet = Buffer.alloc(width * height * 4);
+  for (let offset = 0; offset < sheet.length; offset += 4) sheet.set([...paper, 255], offset);
+  const line = (x0: number, y0: number, x1: number, y1: number, thickness: number, value: number) => {
+    const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0));
+    for (let step = 0; step <= steps; step += 1) {
+      const cx = x0 + (x1 - x0) * step / steps;
+      const cy = y0 + (y1 - y0) * step / steps;
+      for (let y = Math.floor(cy - thickness); y <= Math.ceil(cy + thickness); y += 1) {
+        for (let x = Math.floor(cx - thickness); x <= Math.ceil(cx + thickness); x += 1) {
+          if (x < 0 || y < 0 || x >= width || y >= height || Math.hypot(x - cx, y - cy) > thickness / 2) continue;
+          sheet.set([value, value, value, 255], (y * width + x) * 4);
+        }
+      }
+    }
+  };
+  line(300, 10, 300, 390, 5, 30); // outline
+  line(40, 60, 297, 200, 3, 90); // leader ending on the outline
+  line(40, 340, 297, 300, 3, 90); // a second leader
+  await sharp(sheet, { raw: { width, height, channels: 4 } }).png().toFile(sourcePath);
+  const env = { ...process.env, NODE_ENV: 'test', LOCALAPPDATA: root };
+  const executablePath = process.env.SKETCH_TEST_EXECUTABLE;
+  const app = await electron.launch({ executablePath, args: [...(executablePath ? [] : ['.']), `--user-data-dir=${path.join(root, 'profile')}`], env });
+  try {
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }, filePath) => {
+      Object.defineProperty(dialog, 'showOpenDialog', { configurable: true, value: async () => ({ canceled: false, filePaths: [filePath] }) });
+    }, sourcePath);
+    await page.locator('#emptyOpenButton').click();
+    await expect(page.locator('#imageDimensions')).toContainText('600');
+    const point = (x: number, y: number) => imageScreenPoint(page, x, y, width, height);
+    const click = async (x: number, y: number, key?: 'Shift' | 'Alt') => {
+      const target = await point(x, y);
+      if (key) await page.keyboard.down(key);
+      await page.mouse.click(target.x, target.y);
+      if (key) await page.keyboard.up(key);
+    };
+
+    await page.keyboard.press('w');
+    await expect(page.locator('button[data-tool="line"]')).toHaveAttribute('aria-pressed', 'true');
+    await click(150, 120); // first leader
+    await click(150, 323, 'Shift'); // add the second
+    await click(150, 120, 'Alt'); // take the first back out
+    await page.keyboard.press('Delete');
+    await click(450, 200); // blank paper: nothing to pick, nothing changes
+    await expect(page.locator('#saveState')).toContainText('저장됨');
+
+    const saved = await page.evaluate(async (w) => {
+      const recent = await window.desktop.listRecent();
+      if (!recent.ok || !recent.value[0]) throw new Error('저장된 프로젝트가 없습니다.');
+      const reopened = await window.desktop.openRecent(recent.value[0].id);
+      if (!reopened.ok) throw new Error(reopened.error);
+      const at = (x: number, y: number) => [...reopened.value.snapshot.working.data.slice((y * w + x) * 4, (y * w + x) * 4 + 3)];
+      return { first: at(150, 120), second: at(150, 323), outline: at(300, 320), outlineAtJoin: at(300, 200) };
+    }, width);
+    expect(saved.first).toEqual([90, 90, 90]);
+    expect(saved.second[0]).toBeGreaterThan(200);
+    expect(saved.outline).toEqual([30, 30, 30]);
+    expect(saved.outlineAtJoin).toEqual([30, 30, 30]);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
