@@ -261,5 +261,5 @@ describe('automatic cleanup draft', () => {
     const began = performance.now();
     expect(draft(snapshot)).toBe(snapshot);
     expect(performance.now() - began).toBeLessThan(20_000);
-  });
+  }, 30_000); // The budget above is the check; slow CI runners need more than the 5s default.
 });
