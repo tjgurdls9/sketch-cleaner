@@ -335,6 +335,7 @@ export const MARK_RULES = {
   wavyWiggle: 0.5,
   wavySwing: 0.25,
   leaderMax: 120,
+  hairlineGap: 2,
 };
 
 function lineAngle(a: readonly [number, number], b: readonly [number, number]): number {
@@ -416,28 +417,33 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
       ends.set(key, [...(ends.get(key) ?? []), { segment, x, y }]);
     }
   }
-  const isDash = (segment: Segment): boolean => {
-    for (const [node, point] of freeEnds(segment)) {
-      const [x, y] = xy(point, width);
-      const outward = direction(segment, node, reach, width).map(value => -value) as [number, number];
-      for (let by = -1; by <= 1; by += 1) {
-        for (let bx = -1; bx <= 1; bx += 1) {
-          for (const end of ends.get(bucketKey(x + bx * bucket, y + by * bucket)) ?? []) {
-            if (end.segment === segment) continue;
-            const gap = Math.hypot(end.x - x, end.y - y);
-            if (gap < 1 || gap > bucket) continue;
-            const along = ((end.x - x) * outward[0] + (end.y - y) * outward[1]) / gap;
-            if (along < Math.cos(MARK_RULES.crossAngle * Math.PI / 180)) continue;
-            const [ex, ey] = xy(end.segment.points[0], width);
-            const [fx, fy] = xy(end.segment.points[end.segment.points.length - 1], width);
-            const span = Math.hypot(fx - ex, fy - ey) || 1;
-            if (lineAngle(outward, [(fx - ex) / span, (fy - ey) / span]) <= MARK_RULES.crossAngle) return true;
-          }
+  // The lined-up free end just past one end of a piece, if any.
+  const linedUpEnd = (segment: Segment, node: number, point: number, maxGap: number): { segment: Segment; gap: number; x: number; y: number } | undefined => {
+    const [x, y] = xy(point, width);
+    const outward = direction(segment, node, reach, width).map(value => -value) as [number, number];
+    for (let by = -1; by <= 1; by += 1) {
+      for (let bx = -1; bx <= 1; bx += 1) {
+        for (const end of ends.get(bucketKey(x + bx * bucket, y + by * bucket)) ?? []) {
+          if (end.segment === segment) continue;
+          const gap = Math.hypot(end.x - x, end.y - y);
+          if (gap < 1 || gap > maxGap) continue;
+          const along = ((end.x - x) * outward[0] + (end.y - y) * outward[1]) / gap;
+          if (along < Math.cos(MARK_RULES.crossAngle * Math.PI / 180)) continue;
+          const [ex, ey] = xy(end.segment.points[0], width);
+          const [fx, fy] = xy(end.segment.points[end.segment.points.length - 1], width);
+          const span = Math.hypot(fx - ex, fy - ey) || 1;
+          if (lineAngle(outward, [(fx - ex) / span, (fy - ey) / span]) <= MARK_RULES.crossAngle) return { segment: end.segment, gap, x: end.x, y: end.y };
         }
       }
     }
-    return false;
+    return undefined;
   };
+  // A long piece whose pen skipped for a hairline is one broken line. Hem stitching can look
+  // the same, so this only counts along a leader that starts at a note.
+  const hairline = strokeWidth * MARK_RULES.hairlineGap;
+  const brokenLine = (segment: Segment): boolean => units(segment) >= MARK_RULES.loneStroke
+    && freeEnds(segment).some(([node, point]) => linedUpEnd(segment, node, point, hairline) !== undefined);
+  const isDash = (segment: Segment): boolean => freeEnds(segment).some(([node, point]) => linedUpEnd(segment, node, point, bucket) !== undefined);
   const otherNode = (segment: Segment, node: number): number => (segment.nodes[0] === node ? segment.nodes[1] : segment.nodes[0]);
   const alignment = (a: Segment, b: Segment, node: number): number => {
     const da = direction(a, node, reach, width);
@@ -706,10 +712,22 @@ export function findAnnotationInk(figure: FigureInk, width: number, height: numb
     let current = start;
     let at = from;
     for (let hops = 0; hops < 4; hops += 1) {
-      if (keep.has(current) || (isDash(current) && !noteLeader(current))) return undefined;
+      if (keep.has(current) || (isDash(current) && !noteLeader(current) && !brokenLine(current))) return undefined;
       chain.push(current);
       const far = otherNode(current, at);
-      if (isEnd(far)) return chain;
+      if (isEnd(far)) {
+        // Step over a hairline gap where the pen skipped.
+        const farPoint = current.nodes[0] === far ? current.points[0] : current.points[current.points.length - 1];
+        const across = linedUpEnd(current, far, farPoint, hairline);
+        const landing = across && freeEnds(across.segment).find(([, point]) => {
+          const [x, y] = xy(point, width);
+          return x === across.x && y === across.y;
+        });
+        if (!across || !landing || chain.includes(across.segment)) return chain;
+        current = across.segment;
+        at = landing[0];
+        continue;
+      }
       const next = straightOn(current, far);
       const runsOn = next !== undefined && lineRunOf(next, MARK_RULES.outlineAngle) >= MARK_RULES.lineRun;
       // A drawing line that merely touches a note runs straight on past it: not a leader.
