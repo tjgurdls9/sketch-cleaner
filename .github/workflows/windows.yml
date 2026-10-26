@@ -2,8 +2,13 @@ name: Windows test build
 on:
   # 수동 실행만 — push·PR마다 371MB 빌드가 쌓여 Actions 저장 한도(0.5GB)를 넘겼다.
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '전달용 초안 릴리스 태그 (비우면 기존 artifact 사용)'
+        required: false
+        default: ''
 permissions:
-  contents: read
+  contents: write
 jobs:
   test-and-package:
     runs-on: windows-latest
@@ -96,7 +101,7 @@ jobs:
         if: always()
         run: git bundle create source-history.bundle --all
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && inputs.release_tag == ''
         with:
           name: desktop-verification-evidence
           path: |
@@ -105,8 +110,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
       - uses: actions/upload-artifact@v4
+        if: inputs.release_tag == ''
         with:
           name: SketchCleaner-Windows-x64-TEST-unsigned
           path: out/make/**
           if-no-files-found: error
           retention-days: 1
+      - name: Save verified installer to a draft release
+        if: inputs.release_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($env:RELEASE_TAG -ne "v$version-test") { throw "Release tag must match package version" }
+          Compress-Archive -Path test-results/*,source-history.bundle -DestinationPath desktop-verification-evidence.zip
+          gh release create $env:RELEASE_TAG --draft --target $env:GITHUB_SHA --title "Sketch Cleaner $version Windows test" --notes "Unsigned Windows x64 test installer. Typecheck, lint, unit tests, installed desktop E2E and project data preservation verified. Physical Windows 11 acceptance pending." $env:SKETCH_INSTALLER desktop-verification-evidence.zip
+          if ($LASTEXITCODE -ne 0) { throw "Draft release upload failed" }
