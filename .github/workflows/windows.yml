@@ -1,8 +1,6 @@
 name: Windows test build
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # 수동 실행만 — push·PR마다 371MB 빌드가 쌓여 Actions 저장 한도(0.5GB)를 넘겼다.
   workflow_dispatch:
 permissions:
   contents: read
@@ -105,10 +103,10 @@ jobs:
             test-results/**
             source-history.bundle
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 1
       - uses: actions/upload-artifact@v4
         with:
           name: SketchCleaner-Windows-x64-TEST-unsigned
           path: out/make/**
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
